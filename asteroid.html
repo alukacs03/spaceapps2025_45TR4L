@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Three.js - Asteroid Orbit Starter (module)</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; }
+        #ui {
+            position: absolute; left: 12px; top: 12px; color: #eee;
+            font-family: system-ui, Arial; font-size: 13px; z-index: 2;
+            background: rgba(0,0,0,0.35); padding: 8px 10px; border-radius: 6px;
+        }
+    </style>
+</head>
+<body>
+<div id="ui">Drag to rotate • Scroll to zoom</div>
+<script type="importmap">
+    {
+        "imports": {
+             "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+             "orbit": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js"
+        }
+    }
+</script>
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'orbit';
+
+    //Globals
+    let scene;
+    let camera;
+    let renderer;
+    let controls;
+    let light;
+
+    let earth;
+
+    function init() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+
+        camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000000);
+        camera.position.set(0, 70, 20000);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(innerWidth, innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+        light = new THREE.DirectionalLight(0xffffff, 1.1);
+        light.position.set(120, 100, 80);
+        scene.add(light);
+
+        const earthGeo = new THREE.SphereGeometry(6300, 64, 64);
+        const earthMat = new THREE.MeshStandardMaterial({
+            color: 0x2266dd,
+            metalness: 0.05,
+            roughness: 0.8,
+            emissive: 0x001122,
+        });
+        earth = new THREE.Mesh(earthGeo, earthMat);
+        scene.add(earth);
+
+        window.addEventListener('resize', () => {
+            camera.aspect = innerWidth / innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(innerWidth, innerHeight);
+        });
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        earth.rotation.y += 0.0012;
+
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    init();
+    animate();
+</script>
+</body>
+</html>

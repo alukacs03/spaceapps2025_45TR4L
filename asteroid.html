@@ -2,89 +2,53 @@
 <html lang="en">
 <head>
     <meta charset="utf-8" />
-    <title>Three.js - Asteroid Orbit Starter (module)</title>
+    <title>Globe + Three.js Objects</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <style>
         body { margin: 0; overflow: hidden; background: #000; }
-        #ui {
-            position: absolute; left: 12px; top: 12px; color: #eee;
-            font-family: system-ui, Arial; font-size: 13px; z-index: 2;
-            background: rgba(0,0,0,0.35); padding: 8px 10px; border-radius: 6px;
-        }
+        #globeViz { width: 100vw; height: 100vh; }
     </style>
 </head>
 <body>
-<div id="ui">Drag to rotate • Scroll to zoom</div>
+<div id="globeViz"></div>
+
 <script type="importmap">
     {
-        "imports": {
-             "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-             "orbit": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js"
-        }
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+      }
     }
 </script>
+<script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
 <script type="module">
     import * as THREE from 'three';
-    import { OrbitControls } from 'orbit';
 
-    //Globals
-    let scene;
-    let camera;
-    let renderer;
-    let controls;
-    let light;
+    const globe = Globe()
+        .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
+        .pointsData([{ lat: 40, lng: -74, size: 1.5, color: 'red' }])
+        (document.getElementById('globeViz'));
 
-    let earth;
+    const scene = globe.scene();
+    const camera = globe.camera();
+    const renderer = globe.renderer();
 
-    function init() {
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x000000);
+    scene.add(new THREE.AmbientLight(0xffffff, 10));
+    const sunLight = new THREE.DirectionalLight(0xffffff, 2);
+    sunLight.position.set(5000, 10000, 3000);
+    scene.add(sunLight);
 
-        camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000000);
-        camera.position.set(0, 70, 20000);
+    const asteroidGeo = new THREE.SphereGeometry(50, 32, 32);
+    const asteroidMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+    const asteroid = new THREE.Mesh(asteroidGeo, asteroidMat);
+    asteroid.position.set(800, 0, 0);
+    scene.add(asteroid);
 
-        renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.setSize(innerWidth, innerHeight);
-        document.body.appendChild(renderer.domElement);
-
-        controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.08;
-
-        scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-        light = new THREE.DirectionalLight(0xffffff, 1.1);
-        light.position.set(120, 100, 80);
-        scene.add(light);
-
-        const earthGeo = new THREE.SphereGeometry(6300, 64, 64);
-        const earthMat = new THREE.MeshStandardMaterial({
-            color: 0x2266dd,
-            metalness: 0.05,
-            roughness: 0.8,
-            emissive: 0x001122,
-        });
-        earth = new THREE.Mesh(earthGeo, earthMat);
-        scene.add(earth);
-
-        window.addEventListener('resize', () => {
-            camera.aspect = innerWidth / innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(innerWidth, innerHeight);
-        });
-    }
-
-    function animate() {
+    (function animate() {
         requestAnimationFrame(animate);
-
-        earth.rotation.y += 0.0012;
-
-        controls.update();
-        renderer.render(scene, camera);
-    }
-
-    init();
-    animate();
+        asteroid.rotation.y += 0.01;
+        asteroid.position.x = 800 * Math.cos(Date.now() * 0.001);
+        asteroid.position.z = 800 * Math.sin(Date.now() * 0.001);
+    })();
 </script>
 </body>
 </html>

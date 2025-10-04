@@ -12,13 +12,54 @@
         }
 
         #globeViz {
-            width: 100vw;
+            position: relative;
+            width: 100%;
             height: 100vh;
+            z-index: 0;
+            overflow: hidden;
         }
+        #globeViz > canvas, #globeViz > div, #globeViz > svg {
+            width: 100% !important;
+            height: 100% !important;
+            display: block;
+        }
+        /* In case Globe.gl nests deeper wrappers, force fill */
+        #globeViz * { box-sizing: border-box; }
+
+        /* Split layout toggled on the wrapper to avoid body overrides */
+        #viewRoot.view { width: 100vw; height: 100vh; }
+        #viewRoot.split {
+            display: grid;
+            grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+            grid-template-rows: 100vh;
+        }
+        #viewRoot.split #globeViz { width: 100%; height: 100vh; grid-area: 1 / 1 / 2 / 2; }
+        #statsPanel {
+            display: none;
+            background: linear-gradient(180deg, #121826, #1a2333);
+            color: #e6eefc;
+            border-left: 1px solid #22304a;
+            padding: 14px 14px 18px;
+            overflow: auto;
+            font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+            position: relative;
+            z-index: 1;
+        }
+        #statsPanel h2 { margin: 6px 0 10px; font-size: 18px; }
+        #statsPanel .meta { color: #9fb3c8; font-size: 12px; margin-bottom: 8px; }
+        #statsPanel .item { background: #0f1420; border: 1px solid #22304a; border-radius: 10px; padding: 10px; margin: 8px 0; }
+        #statsPanel .row { display: flex; justify-content: space-between; gap: 8px; }
+        #statsPanel .t { color: #9fb3c8; font-size: 12px; }
+        #statsPanel .v { font-weight: 700; }
+        #viewRoot.split #statsPanel { display: block; height: 100vh; grid-area: 1 / 2 / 2 / 3; }
     </style>
 </head>
 <body>
-<div id="globeViz"></div>
+<div id="viewRoot" class="view">
+  <div id="globeViz"></div>
+  <div id="statsPanel"></div>
+  
+</div>
 
 <script type="importmap">
     {
@@ -35,39 +76,62 @@
 
     const ETALON = 100;
     const EARTH_CENTER = new THREE.Vector3(0, 0, 0);
-    const N = 10;
+    const N = 1;
     let rings = [];
+    let ringsDirty = false;
+    // Static burn polygons (GeoJSON features)
+    let burnPolys = [];
+    let burnPolysDirty = false;
+    // Hover circle overlay (single line loop)
+    let hoverCircle = null;
+    let plannedRingKm = [];
     let asteroidTemplate = null;
     const clock = new THREE.Clock();
+    let rafId = null;
     let asteroids = [];
+    let followTarget = null;
+    let currentImpact = null;
+    // Known impact info (from index page)
+    let impactLatLng = null;      // { lat, lng }
+    let impactTargetVec = null;   // THREE.Vector3 on the sphere (radius ETALON)
+    // Shake & sound state
+    let shake = { base: 3.0, active: 0, start: 0, duration: 0, until: 0, freq: { x: 19, y: 27, z: 33 } };
+    let sound = { enabled: true, impactUrl: null, impactAudio: null };
+    let impactDone = false;
+    // Post-impact zoom state
+    let zoomTransition = { active: false, start: 0, dur: 1200, fromPos: null, toPos: null, fromFov: 85, toFov: 38, aim: null };
 
     const globe = Globe()
         .globeImageUrl('./resources/8081_earthmap10k.jpg')
         .bumpImageUrl('./resources/8081_earthbump10k.jpg')
-        .pointsData([{lat: 40, lng: -74, size: 1.5, color: 'red'}])
+        .pointsData([])
         .showAtmosphere(true)
         .atmosphereAltitude(0.275)
         .ringsData(rings)
-        .ringColor(r => t => {
-            const age = Date.now() - r.createdAt;
-            const alpha = Math.max(0, 1 - age / r.lifetime);
-            return `rgba(255,0,0,${alpha})`;
-        })
+        .ringColor(r => () => (r.color || 'rgba(255,0,0,0.85)'))
         .ringMaxRadius('maxR')
         .ringPropagationSpeed('propagationSpeed')
         .ringRepeatPeriod('repeatPeriod')
+        .polygonsData(burnPolys)
+        .polygonCapColor(f => (f.properties && f.properties.fill) || 'rgba(255,255,0,0.20)')
+        .polygonSideColor(f => (f.properties && f.properties.fill) || 'rgba(255,255,0,0.20)')
+        .polygonStrokeColor(f => (f.properties && f.properties.stroke) || '#ffff00')
+        .polygonAltitude(f => (f.properties && typeof f.properties.alt === 'number') ? f.properties.alt : 0.01)
+        .polygonLabel(f => (f.properties && f.properties.label) || '')
+        .polygonsTransitionDuration(0)
         (document.getElementById('globeViz'));
 
     const globeMaterial = globe.globeMaterial();
     globeMaterial.bumpScale = 30;
-    new THREE.TextureLoader().load('./resources/8081_earthspec10k.jpg', texture => {
-        globeMaterial.specularMap = texture;
-        globeMaterial.shininess = 30;
-    });
+    // Remove specular for stability; keep bump map only
+    globeMaterial.specularMap = null;
+    globeMaterial.shininess = 0;
 
     const scene = globe.scene();
     const camera = globe.camera();
     const renderer = globe.renderer();
+    // Cap pixel ratio to reduce canvas memory usage (force 1.0 for stability)
+    try { renderer.setPixelRatio(1.0); } catch(e) {}
 
     function cartesianToLatLng(pos, radius = ETALON) {
         const x = pos.x / radius;
@@ -77,15 +141,88 @@
         const lng = Math.atan2(x, z) * 180 / Math.PI;
         return { lat, lng };
     }
+    function latLngToVec3(latDeg, lonDeg, radius = ETALON) {
+        const lat = THREE.MathUtils.degToRad(latDeg);
+        const lon = THREE.MathUtils.degToRad(lonDeg);
+        const x = radius * Math.cos(lat) * Math.sin(lon);
+        const y = radius * Math.sin(lat);
+        const z = radius * Math.cos(lat) * Math.cos(lon);
+        return new THREE.Vector3(x, y, z);
+    }
+    // Geodesic destination point on a sphere
+    function destinationPoint(lonDeg, latDeg, bearingRad, distanceKm) {
+        const R = 6371.0088; // km
+        const δ = distanceKm / R;
+        const φ1 = THREE.MathUtils.degToRad(latDeg);
+        const λ1 = THREE.MathUtils.degToRad(lonDeg);
+        const θ = bearingRad;
+        const sinφ2 = Math.sin(φ1)*Math.cos(δ) + Math.cos(φ1)*Math.sin(δ)*Math.cos(θ);
+        const φ2 = Math.asin(sinφ2);
+        const y = Math.sin(θ)*Math.sin(δ)*Math.cos(φ1);
+        const x = Math.cos(δ) - Math.sin(φ1)*Math.sin(φ2);
+        const λ2 = λ1 + Math.atan2(y, x);
+        const lon2 = THREE.MathUtils.radToDeg((λ2 + Math.PI) % (2*Math.PI) - Math.PI);
+        const lat2 = THREE.MathUtils.radToDeg(φ2);
+        return [lon2, lat2];
+    }
+    function circleFeature(lon, lat, radiusKm, steps = 128, props = {}) {
+        if (!Number.isFinite(radiusKm) || radiusKm <= 0) return null;
+        const coords = [];
+        for (let i = 0; i <= steps; i++) {
+            const b = 2 * Math.PI * (i / steps);
+            const [x, y] = destinationPoint(lon, lat, b, radiusKm);
+            coords.push([x, y]);
+        }
+        return { type: 'Feature', properties: props, geometry: { type: 'Polygon', coordinates: [coords] } };
+    }
+
+    // Hover circle overlay as a thin line loop (drawn on top, no depth test)
+    function showHoverCircle(lon, lat, radiusKm, steps = 192) {
+        clearHoverCircle();
+        if (!Number.isFinite(radiusKm) || radiusKm <= 0) return;
+        const pts = [];
+        for (let i = 0; i < steps; i++) {
+            const b = 2 * Math.PI * (i / steps);
+            const [x, y] = destinationPoint(lon, lat, b, radiusKm);
+            const v = latLngToVec3(y, x, ETALON + 1); // slightly above surface
+            pts.push(v);
+        }
+        const geom = new THREE.BufferGeometry().setFromPoints(pts);
+        const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.9, depthTest: false });
+        const loop = new THREE.LineLoop(geom, mat);
+        loop.renderOrder = 9999;
+        scene.add(loop);
+        hoverCircle = loop;
+    }
+    function clearHoverCircle() {
+        if (!hoverCircle) return;
+        try {
+            scene.remove(hoverCircle);
+            if (hoverCircle.geometry) { try { hoverCircle.geometry.dispose(); } catch(e) {} }
+            if (hoverCircle.material) { try { hoverCircle.material.dispose(); } catch(e) {} }
+        } catch(e) {}
+        hoverCircle = null;
+    }
 
     function updateRings() {
         const now = Date.now();
+        let removed = 0;
         for (let i = rings.length - 1; i >= 0; i--) {
             if (now - rings[i].createdAt >= rings[i].lifetime) {
                 rings.splice(i, 1);
+                removed++;
             }
         }
-        globe.ringsData([...rings]);
+        if (removed > 0 || ringsDirty) {
+            ringsDirty = false;
+            globe.ringsData(rings);
+        }
+    }
+    function updatePolygons() {
+        if (burnPolysDirty) {
+            burnPolysDirty = false;
+            try { globe.polygonsData(burnPolys); } catch(e) {}
+        }
     }
 
     class Asteroid {
@@ -135,6 +272,33 @@
             scene.add(this.trajectory);
         }
 
+        dispose() {
+            try {
+                if (this.mesh) {
+                    this.mesh.traverse(o => {
+                        if (o.isMesh) {
+                            if (o.geometry) { try { o.geometry.dispose(); } catch(e) {} }
+                            if (o.material) {
+                                const m = o.material;
+                                if (Array.isArray(m)) m.forEach(mm => { try { mm.dispose(); } catch(e) {} });
+                                else { try { m.dispose(); } catch(e) {} }
+                            }
+                        }
+                    });
+                    scene.remove(this.mesh);
+                }
+            } catch(e) {}
+            try {
+                if (this.trajectory) {
+                    if (this.trajectory.geometry) { try { this.trajectory.geometry.dispose(); } catch(e) {} }
+                    if (this.trajectory.material) { try { this.trajectory.material.dispose(); } catch(e) {} }
+                    scene.remove(this.trajectory);
+                }
+            } catch(e) {}
+            this.mesh = null;
+            this.trajectory = null;
+        }
+
         checkCollision(prevPos) {
             if (this.isKaboom) return false;
             const ray = new THREE.Ray(prevPos, this.mesh.position.clone().sub(prevPos).normalize());
@@ -142,11 +306,30 @@
             const hit = ray.intersectSphere(new THREE.Sphere(EARTH_CENTER, ETALON + this.radius), new THREE.Vector3());
             if (hit && prevPos.distanceTo(hit) <= distance) {
                 this.isKaboom = true;
-                const { lat, lng } = cartesianToLatLng(hit);
-                rings.push({ lat, lng, maxR:300, propagationSpeed:10, repeatPeriod:0.1, color:'red', createdAt: Date.now(), lifetime:2000 });
-                globe.ringsData(rings);
-                scene.remove(this.mesh);
-                scene.remove(this.trajectory);
+                // Use known impact coordinates if available; otherwise fall back
+                let lat, lng;
+                if (impactLatLng) {
+                    lat = Number(impactLatLng.lat);
+                    lng = Number(impactLatLng.lng);
+                } else if (impactTargetVec) {
+                    ({ lat, lng } = cartesianToLatLng(impactTargetVec));
+                } else {
+                    ({ lat, lng } = cartesianToLatLng(hit));
+                }
+                const now = Date.now();
+                if (plannedRingKm.length) {
+                    for (const rkm of plannedRingKm) {
+                        const deg = rkm / 111; // km -> deg approx
+                        rings.push({ lat, lng, maxR: deg, propagationSpeed: 10, repeatPeriod: 0.1, color: 'red', createdAt: now, lifetime: 4000 });
+                    }
+                } else {
+                    rings.push({ lat, lng, maxR: 0.8, propagationSpeed: 10, repeatPeriod: 0.1, color: 'red', createdAt: now, lifetime: 3000 });
+                }
+                ringsDirty = true;
+                this.dispose();
+                // remove from active list
+                const idx = asteroids.indexOf(this);
+                if (idx >= 0) asteroids.splice(idx, 1);
                 return true;
             }
             return false;
@@ -162,7 +345,7 @@
 
     globe.onGlobeReady(() => {
         const loader = new GLTFLoader();
-        camera.position.set(600, 300, 600);
+        camera.position.set(500, 260, 520);
 
         // Lights
         const sunLight = new THREE.DirectionalLight(0xffffff, 2);
@@ -173,18 +356,76 @@
 
         renderer.shadowMap.enabled = true;
 
-        // Coordinate system arrows
-        const origin = new THREE.Vector3(0,0,0);
-        const length = 300, headLength=20, headWidth=10;
-        scene.add(new THREE.ArrowHelper(new THREE.Vector3(1,0,0), origin, length, 0xff0000, headLength, headWidth));
-        scene.add(new THREE.ArrowHelper(new THREE.Vector3(0,1,0), origin, length, 0x00ff00, headLength, headWidth));
-        scene.add(new THREE.ArrowHelper(new THREE.Vector3(0,0,1), origin, length, 0x0000ff, headLength, headWidth));
+        // Omit debug helpers to reduce geometry overhead
 
-        // Grid helpers
-        const gridX = new THREE.GridHelper(ETALON*100, ETALON); gridX.material.opacity=0.2; gridX.material.transparent=true;
-        const gridY = new THREE.GridHelper(ETALON*100, ETALON); gridY.rotation.x = Math.PI/2; gridY.material.opacity=0.2; gridY.material.transparent=true;
-        const gridZ = new THREE.GridHelper(ETALON*100, ETALON); gridZ.rotation.z = Math.PI/2; gridZ.material.opacity=0.2; gridZ.material.transparent=true;
-        scene.add(gridX, gridY, gridZ);
+        // Read context from index page (impact lat/lon and optional rings)
+        try {
+            const raw = localStorage.getItem('terv_ctx');
+            if (raw) {
+                const ctx = JSON.parse(raw);
+                if (ctx?.impact?.lat != null && ctx?.impact?.lon != null) {
+                    const lat = Number(ctx.impact.lat);
+                    const lng = Number(ctx.impact.lon);
+                    impactLatLng = { lat, lng };
+                    // Smaller, subtle marker; comment out to hide completely
+                    globe.pointsData([{ lat, lng, size: 0.5, color: 'rgba(255,80,80,0.95)' }]);
+
+                    // Save ring radii (km) to render upon actual impact
+                    plannedRingKm = String(ctx.rings || '')
+                        .split(',')
+                        .map(s => Number(s.trim()))
+                        .filter(x => x>0);
+                }
+            }
+        } catch (e) { /* ignore */ }
+
+        function spawnAsteroidTo(targetVec) {
+            const dirFromFar = targetVec.clone().normalize();
+            const startPos = targetVec.clone().add(dirFromFar.clone().multiplyScalar(1500));
+            const radius = 10;
+            const speed = 110;
+            const scale = 1.5;
+            const spinAxis = new THREE.Vector3(0.3, 0.7, 0.2).normalize();
+            const spinSpeed = 0.4;
+            const asteroid = new Asteroid(radius, startPos, targetVec, speed, asteroidTemplate, { scale, spinAxis, spinSpeed });
+            asteroids.push(asteroid);
+            followTarget = asteroid;
+            const behind = asteroid.direction.clone().multiplyScalar(-25);
+            const up = new THREE.Vector3(0,1,0);
+            const side = new THREE.Vector3().crossVectors(asteroid.direction, up).normalize().multiplyScalar(10);
+            const camPos = asteroid.mesh.position.clone().add(behind).add(side).add(up.clone().multiplyScalar(4));
+            camera.position.copy(camPos);
+            camera.lookAt(asteroid.mesh.position);
+            camera.fov = 85;
+            camera.updateProjectionMatrix();
+            try {
+                const controls = globe.controls && globe.controls();
+                if (controls) {
+                    controls.target.copy(asteroid.mesh.position);
+                    controls.update?.();
+                }
+            } catch(e) {}
+        }
+
+        function targetVecFromContextOrCenter() {
+            let target = EARTH_CENTER.clone();
+            try {
+                const raw = localStorage.getItem('terv_ctx');
+                if (raw) {
+                    const ctx = JSON.parse(raw);
+                    if (ctx?.impact?.lat != null && ctx?.impact?.lon != null) {
+                        const lat = THREE.MathUtils.degToRad(ctx.impact.lat);
+                        const lon = THREE.MathUtils.degToRad(ctx.impact.lon);
+                        const x = ETALON * Math.cos(lat) * Math.sin(lon);
+                        const y = ETALON * Math.sin(lat);
+                        const z = ETALON * Math.cos(lat) * Math.cos(lon);
+                        target = new THREE.Vector3(x, y, z);
+                        impactTargetVec = target.clone();
+                    }
+                }
+            } catch(e) {}
+            return target;
+        }
 
         loader.load('./models/asteroid.glb', gltf => {
             asteroidTemplate = gltf.scene;
@@ -203,37 +444,629 @@
             });
             asteroidTemplate.scale.setScalar(1);
 
-            for (let i = 0; i < N; i++) {
-                const pos = new THREE.Vector3(
-                    (Math.random()-0.5)*8000,
-                    (Math.random()-0.5)*8000,
-                    (Math.random()-0.5)*8000
-                );
-                const radius = 5 + Math.random()*(15-5);
-                const speed = THREE.MathUtils.randFloat(200,300);
-                const scale = THREE.MathUtils.randFloat(1,2);
-                const spinAxis = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize();
-                const spinSpeed = THREE.MathUtils.randFloat(0.3,1.2);
-                const targetVariation = new THREE.Vector3(
-                    (Math.random()-0.5)*300,
-                    (Math.random()-0.5)*300,
-                    (Math.random()-0.5)*300
-                );
-                const target = EARTH_CENTER.clone().add(targetVariation);
-
-                const asteroid = new Asteroid(radius, pos, target, speed, asteroidTemplate, { scale, spinAxis, spinSpeed });
-                asteroids.push(asteroid);
-            }
+            spawnAsteroidTo(targetVecFromContextOrCenter());
+            try { setupOverlay(); } catch(e) {}
+            try { initSound(); if (sound.enabled && sound.impactAudio) sound.impactAudio.volume = 0.9; } catch(e) { console.warn(e); }
         });
     });
 
     // Main animation loop
     (function animate() {
-        requestAnimationFrame(animate);
+        rafId = requestAnimationFrame(animate);
         const dt = clock.getDelta();
         asteroids.forEach(a => a.animate(dt));
+        // Smooth follow camera on the tracked asteroid
+        if (followTarget) {
+            if (followTarget.isKaboom) {
+                followTarget = null; // stop following after impact
+            } else {
+                const dir = followTarget.direction.clone();
+                const behind = dir.clone().multiplyScalar(-18);
+                const up = new THREE.Vector3(0,1,0);
+                const side = new THREE.Vector3().crossVectors(dir, up).normalize().multiplyScalar(8);
+                const desired = followTarget.mesh.position.clone().add(behind).add(side).add(up.clone().multiplyScalar(3));
+                // Apply camera shake offset
+                const t = performance.now() * 0.001;
+                const shakeAmp = currentShakeAmount();
+                const sh = new THREE.Vector3(
+                    (Math.sin(t * shake.freq.x) + Math.cos(t * 2.1)) * 0.5,
+                    (Math.sin(t * shake.freq.y) + Math.cos(t * 1.7)) * 0.5,
+                    (Math.sin(t * shake.freq.z) + Math.cos(t * 2.7)) * 0.5
+                ).multiplyScalar(shakeAmp * 1.3);
+                desired.add(sh);
+                camera.position.lerp(desired, 0.22);
+                camera.lookAt(followTarget.mesh.position);
+                try {
+                    const controls = globe.controls && globe.controls();
+                    if (controls) {
+                        controls.target.lerp(followTarget.mesh.position, 0.35);
+                        controls.update?.();
+                    }
+                } catch(e) {}
+            }
+        }
+        // Zoom onto impact site if requested
+        if (zoomTransition.active) {
+            const now = performance.now();
+            const t = Math.min(1, (now - zoomTransition.start) / zoomTransition.dur);
+            const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+            const cur = new THREE.Vector3().copy(zoomTransition.fromPos).lerp(zoomTransition.toPos, eased);
+            camera.position.copy(cur);
+            camera.fov = THREE.MathUtils.lerp(zoomTransition.fromFov, zoomTransition.toFov, eased);
+            camera.updateProjectionMatrix();
+            if (zoomTransition.aim) {
+                camera.lookAt(zoomTransition.aim);
+                try {
+                    const controls = globe.controls && globe.controls();
+                    if (controls) {
+                        controls.target.copy(zoomTransition.aim);
+                        controls.update?.();
+                    }
+                } catch(e) {}
+            }
+            if (t >= 1) zoomTransition.active = false;
+        }
         updateRings();
+        updatePolygons();
     })();
+
+    // Dispose helpers on unload to release GPU memory
+    function disposeNode(node) {
+        try {
+            if (node.geometry) { try { node.geometry.dispose(); } catch(e) {} }
+            if (node.material) {
+                const m = node.material;
+                if (Array.isArray(m)) m.forEach(mm => { try { mm.dispose(); } catch(e) {} });
+                else { try { m.dispose(); } catch(e) {} }
+            }
+        } catch(e) {}
+    }
+    function disposeScene() {
+        try { if (rafId) { cancelAnimationFrame(rafId); rafId = null; } } catch(e) {}
+        try { clearHoverCircle(); } catch(e) {}
+        // Dispose active asteroids and template
+        try { for (const a of asteroids) { try { a.dispose(); } catch(e) {} } } catch(e) {}
+        asteroids = [];
+        followTarget = null;
+        try { if (asteroidTemplate) { asteroidTemplate.traverse(disposeNode); } } catch(e) {}
+        // Clear globe overlays
+        try { globe.ringsData([]); } catch(e) {}
+        try { globe.polygonsData([]); } catch(e) {}
+        // Dispose controls explicitly if present
+        try { const c = globe.controls && globe.controls(); if (c && c.dispose) c.dispose(); } catch(e) {}
+        // Dispose textures from material on teardown (reset everything)
+        try {
+            if (globeMaterial) {
+                if (globeMaterial.map) { try { globeMaterial.map.dispose(); } catch(_) {} globeMaterial.map = null; }
+                if (globeMaterial.bumpMap) { try { globeMaterial.bumpMap.dispose(); } catch(_) {} globeMaterial.bumpMap = null; }
+                if (globeMaterial.specularMap) { try { globeMaterial.specularMap.dispose(); } catch(_) {} globeMaterial.specularMap = null; }
+            }
+        } catch(e) {}
+        // Audio cleanup
+        try {
+            if (sound.impactAudio) {
+                sound.impactAudio.pause();
+                sound.impactAudio.src = '';
+                try { sound.impactAudio.load(); } catch(_) {}
+            }
+        } catch(e) {}
+        // Renderer + GL context loss
+        try {
+            if (renderer) {
+                renderer.dispose();
+                if (renderer.forceContextLoss) { try { renderer.forceContextLoss(); } catch(_) {} }
+                const gl = renderer.getContext && renderer.getContext();
+                if (gl && gl.getExtension) {
+                    const ext = gl.getExtension('WEBGL_lose_context');
+                    if (ext && ext.loseContext) { try { ext.loseContext(); } catch(_) {} }
+                }
+            }
+        } catch(e) {}
+        // Remove canvas to drop any retained references
+        try {
+            const el = document.getElementById('globeViz');
+            if (el) { while (el.firstChild) el.removeChild(el.firstChild); }
+        } catch(e) {}
+    }
+    window.addEventListener('beforeunload', disposeScene);
+    window.addEventListener('pagehide', disposeScene);
+    window.addEventListener('unload', disposeScene);
+
+    function simulateAnotherImpact() {
+        // Clean up any running asteroid
+        try { clearHoverCircle(); } catch(e) {}
+        try {
+            for (const a of asteroids) { try { a.dispose(); } catch(e) {} }
+        } catch(e) {}
+        asteroids = [];
+        followTarget = null;
+        // Clear rings and polygons
+        rings = [];
+        ringsDirty = false;
+        try { globe.ringsData([]); } catch(e) {}
+        burnPolys = [];
+        burnPolysDirty = false;
+        try { globe.polygonsData([]); } catch(e) {}
+        // Reset impact state and spawn again towards last known impact or context
+        impactDone = false;
+        let target = impactTargetVec;
+        if (!target) {
+            if (currentImpact) {
+                const lat = THREE.MathUtils.degToRad(currentImpact.lat);
+                const lon = THREE.MathUtils.degToRad(currentImpact.lon);
+                const x = ETALON * Math.cos(lat) * Math.sin(lon);
+                const y = ETALON * Math.sin(lat);
+                const z = ETALON * Math.cos(lat) * Math.cos(lon);
+                target = new THREE.Vector3(x, y, z);
+            } else {
+                target = targetVecFromContextOrCenter();
+            }
+        }
+        spawnAsteroidTo(target.clone());
+    }
+
+    // --- Shake helpers ---
+    function triggerShake(amount = 2.5, durationMs = 2000) {
+        const now = performance.now();
+        shake.active = amount;
+        shake.start = now;
+        shake.duration = durationMs;
+        shake.until = now + durationMs;
+    }
+    function currentShakeAmount() {
+        const now = performance.now();
+        if (now >= shake.until || shake.duration <= 0) return shake.base;
+        const t = (now - shake.start) / shake.duration; // 0..1
+        const fade = Math.max(0, 1 - t);
+        return shake.base + shake.active * fade;
+    }
+
+    // Patch asteroid collision to trigger shake and sound
+    const _checkCollision = Asteroid.prototype.checkCollision;
+    Asteroid.prototype.checkCollision = function(prevPos) {
+        const hit = _checkCollision.call(this, prevPos);
+        if (hit) {
+            triggerShake(6.0, 3500);
+            if (sound.enabled && sound.impactAudio) {
+                try { sound.impactAudio.currentTime = 0; sound.impactAudio.play(); } catch(e) {}
+            }
+            try {
+                // Show stats panel using known impact location
+                const loc = (impactLatLng ? impactLatLng
+                           : (impactTargetVec ? cartesianToLatLng(impactTargetVec)
+                           : cartesianToLatLng(hit)));
+                // Remove the location marker point
+                try { globe.pointsData([]); } catch(e) {}
+                // Save impact location for hover overlays
+                try { currentImpact = { lat: Number(loc.lat), lon: Number(loc.lng) }; } catch(e) {}
+                onImpact(loc.lat, loc.lng);
+            } catch(e) { console.warn('stats init failed', e); }
+        }
+        return hit;
+    };
+
+    // --- Sound helpers & overlay ---
+    function setupOverlay() {
+        const ui = document.createElement('div');
+        ui.style.position = 'fixed';
+        ui.style.top = '12px';
+        ui.style.left = '12px';
+        ui.style.zIndex = '10';
+        ui.style.display = 'flex';
+        ui.style.gap = '8px';
+        ui.style.alignItems = 'center';
+        const btn = document.createElement('button');
+        btn.textContent = sound.enabled ? 'Disable Sound' : 'Enable Sound';
+        btn.style.padding = '6px 10px';
+        btn.style.borderRadius = '8px';
+        btn.style.border = '1px solid #22304a';
+        btn.style.background = '#24324a';
+        btn.style.color = '#e6eefc';
+        btn.addEventListener('click', () => {
+            sound.enabled = !sound.enabled;
+            btn.textContent = sound.enabled ? 'Disable Sound' : 'Enable Sound';
+            if (sound.enabled && sound.impactAudio) {
+                try { sound.impactAudio.play().then(()=>{ sound.impactAudio.pause(); sound.impactAudio.currentTime = 0; }); } catch(e) {}
+            }
+        });
+        ui.appendChild(btn);
+        document.body.appendChild(ui);
+    }
+    function initSound() {
+        const q = new URLSearchParams(window.location.search);
+        const ls = localStorage.getItem('terv_sound_impact') || '';
+        const url = q.get('impactSound') || ls || './resources/impact.mp3';
+        sound.impactUrl = url;
+        // Prepare HTMLAudio (simple and reliable)
+        try {
+            const a = new Audio(url);
+            a.preload = 'auto';
+            a.volume = 0.9;
+            a.crossOrigin = 'anonymous';
+            sound.impactAudio = a;
+        } catch(e) { console.warn('audio init failed', e); }
+    }
+
+    // --- Stats panel & API integration ---
+    function onImpact(lat, lon) {
+        if (impactDone) return; impactDone = true;
+        try { currentImpact = { lat: Number(lat), lon: Number(lon) }; } catch(e) {}
+        const root = document.getElementById('viewRoot');
+        if (root) root.classList.add('split');
+        const panel = document.getElementById('statsPanel');
+        panel.style.display = 'block';
+        panel.innerHTML = '';
+        panel.appendChild(buildHeader(lat, lon));
+        panel.appendChild(buildKpiGrid());
+        panel.appendChild(buildImpactSections());
+        // Add action to simulate another impact
+        try {
+            const act = document.createElement('div');
+            act.style.marginTop = '12px';
+            const btn = document.createElement('button');
+            btn.textContent = 'Simulate another impact';
+            btn.style.padding = '10px 12px';
+            btn.style.borderRadius = '10px';
+            btn.style.border = '1px solid #22304a';
+            btn.style.background = '#2b3b5a';
+            btn.style.color = '#e6eefc';
+            btn.style.fontWeight = '600';
+            btn.addEventListener('click', () => {
+                try { disposeScene(); } catch(_) {}
+                window.location.href = 'index.html';
+            });
+            act.appendChild(btn);
+            panel.appendChild(act);
+        } catch(e) {}
+        // Resize renderer to new layout
+        queueResize();
+        // Dramatic zoom onto the impact point
+        try {
+            const aim = latLngToVec3(lat, lon, ETALON);
+            const fromPos = camera.position.clone();
+            const outward = aim.clone().normalize();
+            const toPos = outward.clone().multiplyScalar(ETALON + 24); // ~24 units above surface
+            zoomTransition = {
+                active: true,
+                start: performance.now(),
+                dur: 1200,
+                fromPos,
+                toPos,
+                fromFov: camera.fov,
+                toFov: 38,
+                aim
+            };
+        } catch(e) {}
+        // Kick off API calls
+        fetchIsOcean(lat, lon)
+          .then(async (isOcean) => {
+            setText('kEnv', isOcean ? 'Ocean' : 'Land');
+            // Impact summary from backend
+            try {
+                const summary = await fetchImpactSummary(isOcean);
+                renderImpactSummary(summary);
+                drawImpactRings(lat, lon, summary);
+                // Populate thermal impact population from API-derived ring distances
+                await populateThermalImpactPopulation(lat, lon, summary);
+                // Populate ignite thresholds from API
+                populateThermalRanges(summary);
+            } catch(e) {
+                addNote('impactErr', 'Impact API error: ' + String(e));
+            }
+          })
+          .catch(()=> setText('kEnv','—'))
+          .finally(() => {
+            // KPI values and thermal population handled from API summary above
+          });
+    }
+    function queueResize() {
+        setTimeout(() => {
+            const el = document.getElementById('globeViz');
+            try {
+                const w = el.clientWidth || window.innerWidth;
+                const h = el.clientHeight || window.innerHeight;
+                // Ask globe/gl renderer to fit container
+                if (typeof globe.width === 'function') globe.width(w);
+                if (typeof globe.height === 'function') globe.height(h);
+                renderer.setSize(w, h, false);
+                camera.aspect = w / h;
+                camera.updateProjectionMatrix();
+            } catch(e) {}
+            window.dispatchEvent(new Event('resize'));
+        }, 50);
+    }
+    function el(tag, props = {}, children = []) { const e = document.createElement(tag); Object.assign(e, props); children.forEach(c=>e.appendChild(c)); return e; }
+    function txt(s) { return document.createTextNode(String(s)); }
+    function setText(id, v) { const n = document.getElementById(id); if (n) n.textContent = v; }
+    function addNote(id, message) { const n = document.getElementById(id); if (n) n.textContent = message; }
+    function buildHeader(lat, lon) {
+        const h = el('div');
+        h.appendChild(el('h2', { innerText: 'Impact Report' }));
+        h.appendChild(el('div', { className: 'meta', innerText: `Lat ${lat.toFixed(4)}, Lon ${lon.toFixed(4)}` }));
+        return h;
+    }
+    function buildKpiGrid() {
+        const wrap = el('div');
+        wrap.appendChild(card('Environment', el('span', { id:'kEnv', innerText: '…' })));
+        wrap.appendChild(card('Kinetic energy (TNT eq.)', el('span', { id:'kEnergy', innerText: '…' })));
+        wrap.appendChild(card('Crater diameter (km)', el('span', { id:'kCrater', innerText: '…' })));
+        return wrap;
+    }
+    function card(title, valueNode) {
+        const c = el('div', { className: 'item' });
+        const r1 = el('div', { className: 't', innerText: title });
+        const r2 = el('div', { className: 'v' }); r2.appendChild(valueNode);
+        c.appendChild(r1); c.appendChild(r2);
+        return c;
+    }
+    function buildImpactSections() {
+        const wrap = el('div');
+        // Keep only thermal population list and API ranges; omit verbose impact summary text blocks
+        wrap.appendChild(el('div', { id: 'impactErr', className: 'meta', innerText: '' }));
+        // Thermal population section
+        wrap.appendChild(el('h2', { innerText: 'Thermal impact population' }));
+        const tlist = el('div', { id: 'thermalPopList' });
+        wrap.appendChild(tlist);
+        // Thermal ranges section (ignite thresholds from API)
+        wrap.appendChild(el('h2', { innerText: 'Thermal ranges (API)' }));
+        const rlist = el('div', { id: 'thermalRangesList' });
+        wrap.appendChild(rlist);
+        return wrap;
+    }
+
+    function projectileFromContext() {
+        try {
+            const raw = localStorage.getItem('terv_ctx');
+            let d_m = 0, v_kps = 0, rho = 3000, angle = 45;
+            if (raw) {
+                const ctx = JSON.parse(raw);
+                const sa = ctx?.selectedAsteroid;
+                if (sa) {
+                    const d_avg_km = ((sa.diameter_km_min ?? 0) + (sa.diameter_km_max ?? 0)) / 2;
+                    d_m = Math.max(1, d_avg_km * 1000);
+                    v_kps = Number(sa.vel_kps) || 17;
+                }
+            }
+            if (!d_m) d_m = 680; // sensible fallback
+            if (!v_kps) v_kps = 17;
+            return { diameter_m: d_m, speed_mps: v_kps*1000, density_kgpm3: rho, angle_deg: angle };
+        } catch(e) {
+            return { diameter_m: 680, speed_mps: 17000, density_kgpm3: 3000, angle_deg: 45 };
+        }
+    }
+    async function fetchImpactSummary(isOcean) {
+        const projectile = projectileFromContext();
+        const body = {
+            projectile,
+            target: { kind: isOcean ? 'water' : 'crystalline' },
+            options: { luminous_efficiency: 3e-3, tsunami_depth_m: 3682.0, tsunami_distance_km: 100.0, tsunami_slope_ratio: 0.005 }
+        };
+        const bases = apiBases();
+        const errs = [];
+        for (const b of bases) {
+            try {
+                const res = await fetch(b + '/impact/summary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                if (!res.ok) throw new Error(String(res.status));
+                return await res.json();
+            } catch(e) { errs.push(`${b}: ${e}`); }
+        }
+        throw new Error('All backends failed: ' + errs.join(' | '));
+    }
+    function fmtKm(x) {
+        if (x == null || isNaN(Number(x))) return '—';
+        const v = Number(x);
+        if (v > 0 && v < 0.01) return '< 0.01 km';
+        return v.toFixed(2) + ' km';
+    }
+    function fmtMt(x) { return x == null ? '—' : Number(x).toFixed(2) + ' Mt TNT'; }
+    function formatTntEqFromMt(mt) {
+        if (mt == null || isNaN(mt)) return '—';
+        const x = Number(mt);
+        if (x >= 1) return x.toFixed(2) + ' Mt';
+        const kt = x * 1e3;
+        if (kt >= 1) return kt.toFixed(2) + ' kt';
+        const t = x * 1e6;
+        if (t >= 1) return t.toFixed(2) + ' t';
+        const kg = x * 1e9;
+        if (kg >= 1) return kg.toFixed(2) + ' kg';
+        return '< 1 kg';
+    }
+    function renderImpactSummary(s) {
+        // Only update KPI cards; omit verbose text outputs
+        try {
+            const E = s.energy || {};
+            const J = E.kinetic_J;
+            let Mt = E.tnt_megatons;
+            if ((Mt == null || isNaN(Number(Mt))) && J != null && !isNaN(Number(J))) {
+                Mt = Number(J) / 4.184e15;
+            }
+            setText('kEnergy', formatTntEqFromMt(Mt));
+        } catch(e) {}
+        try {
+            const C = s.crater || {};
+            const Dfr_km = (C.final_diameter_m || 0)/1000.0;
+            setText('kCrater', Dfr_km > 0 ? Dfr_km.toFixed(2) : '—');
+        } catch(e) {}
+    }
+
+    function drawImpactRings(lat, lon, s) {
+        try {
+            const now = Date.now();
+            const addRing = (km, color, life=40000, speed=0.05) => {
+                if (!km || km<=0) return;
+                const deg = km / 111.0;
+                rings.push({ lat, lng: lon, maxR: deg, propagationSpeed: speed, repeatPeriod: 1e9, color, createdAt: now, lifetime: life });
+                ringsDirty = true;
+            };
+            // crater
+            const C = s.crater || {};
+            if (C.final_diameter_m && C.final_diameter_m>0) addRing((C.final_diameter_m/1000)/2, 'rgba(255,255,255,0.9)', 25000);
+            // STATIC thermal circles: DEAD (third-degree), second-degree, first-degree
+            const r = (s.thermal && s.thermal.ring_distances_km) || {};
+            const feats = [];
+            const red = circleFeature(
+                lon, lat, Number(r.third_degree_burn), 192,
+                { fill: 'rgba(255,0,0,0.22)', stroke: '#ff0000', alt: 0.010, label: 'DEAD (third-degree burns)' }
+            );
+            const orange = circleFeature(
+                lon, lat, Number(r.second_degree_burn), 192,
+                { fill: 'rgba(255,165,0,0.20)', stroke: '#ffa500', alt: 0.010, label: 'Second-degree burns' }
+            );
+            const yellow = circleFeature(
+                lon, lat, Number(r.first_degree_burn), 192,
+                { fill: 'rgba(255,255,0,0.18)', stroke: '#ffff00', alt: 0.010, label: 'First-degree burns' }
+            );
+            if (red) feats.push(red);
+            if (orange) feats.push(orange);
+            if (yellow) feats.push(yellow);
+            burnPolys = feats;
+            burnPolysDirty = true;
+        } catch(e) {}
+    }
+
+    // --- Thermal impact population (from API rings; non-overlapping; ordered by km) ---
+    function nf(x) { return new Intl.NumberFormat('en-US').format(Math.round(Number(x)||0)); }
+    async function populateThermalImpactPopulation(lat, lon, summary) {
+        const list = document.getElementById('thermalPopList');
+        if (!list) return;
+        list.innerHTML = '';
+        try {
+            const r = (summary && summary.thermal && summary.thermal.ring_distances_km) || {};
+            const third = Number(r.third_degree_burn);
+            const second = Number(r.second_degree_burn);
+            const first = Number(r.first_degree_burn);
+            // Use desired categories but keep strictly increasing radii only
+            const desired = [
+                { key: 'dead', label: 'DEAD', km: third },
+                { key: 'burn2', label: 'Second-degree injuries', km: second },
+                { key: 'burn1', label: 'First-degree injuries', km: first },
+            ]
+            .filter(x => Number.isFinite(x.km) && x.km > 0)
+            .sort((a,b) => a.km - b.km);
+            const ringsKm = [];
+            for (const d of desired) {
+                if (ringsKm.length === 0 || d.km > ringsKm[ringsKm.length-1].km) {
+                    ringsKm.push(d);
+                }
+            }
+
+            if (!ringsKm.length) {
+                list.appendChild(el('div', { className: 'meta', innerText: 'No thermal ring distances available from API.' }));
+                return;
+            }
+
+            // Build rows in km order
+            for (const d of ringsKm) {
+                const row = el('div', { className: 'item', id: `therm-${d.key}` });
+                let label = d.label;
+                // Add range context for non-innermost items later when we know prev
+                row.appendChild(el('div', { className: 'row' }, [
+                    el('div', { id: `therm-lbl-${d.key}`, innerText: `${label}` }),
+                    el('div', { id: `therm-val-${d.key}`, innerText: 'loading…' })
+                ]));
+                list.appendChild(row);
+            }
+
+            // Fetch cumulative populations and compute non-overlapping annuli
+            let prevCum = 0;
+            let prevKm = 0;
+            for (let i = 0; i < ringsKm.length; i++) {
+                const d = ringsKm[i];
+                try {
+                    const cum = await fetchPopulation(lat, lon, d.km);
+                    const inc = Math.max(0, cum - prevCum);
+                    const label = i === 0
+                        ? `${d.label} (<= ${fmtKm(d.km)})`
+                        : `${d.label} (${fmtKm(prevKm)} – ${fmtKm(d.km)})`;
+                    setText(`therm-lbl-${d.key}`, label);
+                    setText(`therm-val-${d.key}`, nf(inc));
+                    prevCum = cum;
+                    prevKm = d.km;
+                } catch (e) {
+                    setText(`therm-val-${d.key}`, 'error');
+                }
+            }
+        } catch(e) {
+            list.appendChild(el('div', { className: 'meta', innerText: 'Error building thermal population list.' }));
+        }
+    }
+
+    // --- Thermal ignite ranges (from API; ordered by km; no population counts) ---
+    function populateThermalRanges(summary) {
+        const list = document.getElementById('thermalRangesList');
+        if (!list) return;
+        list.innerHTML = '';
+        try {
+            const r = (summary && summary.thermal && summary.thermal.ring_distances_km) || {};
+            const items = [
+                { key: 'clothes', label: 'Clothes ignite', km: r.clothes_ignite },
+                { key: 'plywood', label: 'Plywood ignite', km: r.plywood_ignite },
+                { key: 'grass', label: 'Grass ignite', km: r.grass_ignite },
+                { key: 'paper', label: 'Newspaper ignite', km: r.newspaper_ignite },
+                { key: 'trees', label: 'Trees ignite', km: r.trees_ignite },
+            ]
+            .filter(x => Number.isFinite(Number(x.km)) && Number(x.km) > 0)
+            .map(x => ({ ...x, km: Number(x.km) }))
+            .sort((a,b) => a.km - b.km);
+
+            if (!items.length) {
+                list.appendChild(el('div', { className: 'meta', innerText: 'No ignite thresholds available from API.' }));
+                return;
+            }
+
+            for (const it of items) {
+                const row = el('div', { className: 'item' });
+                row.appendChild(el('div', { className: 'row' }, [
+                    el('div', { innerText: it.label }),
+                    el('div', { innerText: fmtKm(it.km) })
+                ]));
+                // Hover overlay on globe (line loop on top)
+                row.addEventListener('mouseenter', () => {
+                    try {
+                        if (!currentImpact) return;
+                        showHoverCircle(currentImpact.lon, currentImpact.lat, it.km, 192);
+                    } catch(e) {}
+                });
+                row.addEventListener('mouseleave', () => {
+                    try { clearHoverCircle(); } catch(e) {}
+                });
+                list.appendChild(row);
+            }
+        } catch(e) {
+            list.appendChild(el('div', { className: 'meta', innerText: 'Error reading ignite thresholds.' }));
+        }
+    }
+    // Population-by-ring UI removed per requirements
+    function apiBases() {
+        // API lives on localhost:8080
+        const proto = window.location.protocol || 'http:';
+        return [`${proto}//localhost:8080`];
+    }
+    async function fetchJSON(path, params) {
+        const qs = params ? ('?' + new URLSearchParams(params).toString()) : '';
+        const errs = [];
+        for (const b of apiBases()) {
+            try {
+                const res = await fetch(b + path + qs);
+                if (!res.ok) throw new Error(String(res.status));
+                return await res.json();
+            } catch (e) { errs.push(`${b}: ${e}`); }
+        }
+        throw new Error('All backends failed: ' + errs.join(' | '));
+    }
+    async function fetchIsOcean(lat, lon) {
+        const data = await fetchJSON('/isOcean', { lat, lon });
+        return !!data; // api returns boolean
+    }
+    async function fetchPopulation(lat, lon, radius) {
+        const data = await fetchJSON('/getPopulation', {
+            lat, lon, radius,
+            year: 2020, dataset: 'wpgppop'
+        });
+        return Number(data.population) || 0;
+    }
+    // computeImpactModelKpis removed to ensure data is sourced from API
+    // fetchRingsPopulation removed per requirements
 </script>
 </body>
 </html>

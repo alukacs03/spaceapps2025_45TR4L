@@ -1,12 +1,33 @@
 from fastapi import FastAPI, Query, HTTPException
-from pydantic import condecimal
+from fastapi.middleware.cors import CORSMiddleware
+import logging
+from pydantic import BaseModel, Field
 import httpx
 import os
 import math, json, time, re
 from dotenv import load_dotenv
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Literal
+
+# Support both 'uvicorn api.app:app' (from repo root) and 'uvicorn app:app' (from api folder)
+try:
+    from .impact_model import Projectile, Target, ImpactModel  # type: ignore
+except Exception:  # pragma: no cover - fallback when run from api/ as top-level module
+    from impact_model import Projectile, Target, ImpactModel  # type: ignore
 
 app = FastAPI(title="Geo Aggregator (population-only, tiled)", version="2.0.0")
+
+# CORS: allow frontend on localhost:8000
+ALLOWED_ORIGINS = [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -------------------------------
 # Health + small utility endpoint
@@ -17,13 +38,15 @@ def health():
 
 @app.get("/isOcean")
 def is_ocean(
-    lat: condecimal(ge=-90, le=90) = Query(..., description="Latitude in decimal degrees"),
-    lon: condecimal(ge=-180, le=180) = Query(..., description="Longitude in decimal degrees")
+    lat: float = Query(..., ge=-90, le=90, description="Latitude in decimal degrees"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude in decimal degrees")
 ):
     load_dotenv()
     geonames_username = os.getenv("GEONAMES_USERNAME")
     if not geonames_username:
-        raise HTTPException(status_code=500, detail="GeoNames username not configured.")
+        logging.warning("GeoNames username not configured; returning land by default.")
+        # Graceful fallback: treat as land when not configured
+        return False
 
     geonames_url = f"http://api.geonames.org/oceanJSON?lat={lat}&lng={lon}&username={geonames_username}"
     try:
@@ -32,7 +55,59 @@ def is_ocean(
         data = r.json()
         return bool(data.get("ocean"))
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching data from GeoNames: {str(e)}")
+        logging.warning("GeoNames request failed; returning land. error=%s", e)
+        return False
+
+# -------------------------------
+# Impact simulation endpoints
+# -------------------------------
+
+class ProjectileIn(BaseModel):
+    diameter_m: float = Field(..., gt=0, description="Projectile diameter in meters")
+    speed_mps: float = Field(..., gt=0, description="Impact speed in m/s")
+    density_kgpm3: float = Field(..., gt=0, description="Bulk density in kg/m^3")
+    angle_deg: float = Field(..., ge=0, le=90, description="Entry angle to horizontal in degrees")
+
+class TargetIn(BaseModel):
+    kind: Literal["crystalline", "sedimentary", "water"] = Field("crystalline")
+    density_kgpm3: Optional[float] = Field(None, gt=0)
+    gravity_mps2: float = Field(9.80665, gt=0)
+
+class ImpactOptions(BaseModel):
+    luminous_efficiency: float = Field(3e-3, gt=0, lt=1)
+    tsunami_depth_m: float = Field(3682.0, gt=0)
+    tsunami_distance_km: Optional[float] = Field(100.0, gt=0)
+    tsunami_slope_ratio: float = Field(0.005, gt=0)
+
+class ImpactRequest(BaseModel):
+    projectile: ProjectileIn
+    target: TargetIn
+    options: Optional[ImpactOptions] = None
+
+@app.post("/impact/summary")
+def impact_summary(req: ImpactRequest):
+    # Build domain objects
+    p = Projectile(
+        diameter_m=req.projectile.diameter_m,
+        speed_mps=req.projectile.speed_mps,
+        density_kgpm3=req.projectile.density_kgpm3,
+        angle_deg=req.projectile.angle_deg,
+    )
+    t = Target(
+        kind=req.target.kind,
+        density_kgpm3=req.target.density_kgpm3,
+        gravity_mps2=req.target.gravity_mps2,
+    )
+    model = ImpactModel(p, t)
+
+    opts = req.options or ImpactOptions()
+    summary = model.summary(
+        luminous_eff=opts.luminous_efficiency,
+        tsunami_depth_m=opts.tsunami_depth_m,
+        tsunami_distance_km=opts.tsunami_distance_km,
+        tsunami_slope_ratio=opts.tsunami_slope_ratio,
+    )
+    return summary
 
 # -------------------------------
 # WorldPop constants + helpers
@@ -273,9 +348,9 @@ def _worldpop_population_for_geojson(client: httpx.Client, dataset: str, year: i
 # ---------------------------------
 @app.get("/getPopulation")
 def get_population(
-    lat: condecimal(ge=-90, le=90) = Query(..., description="Latitude in decimal degrees"),
-    lon: condecimal(ge=-180, le=180) = Query(..., description="Longitude in decimal degrees"),
-    radius: condecimal(gt=0) = Query(..., description="Radius in kilometers"),
+    lat: float = Query(..., ge=-90, le=90, description="Latitude in decimal degrees"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude in decimal degrees"),
+    radius: float = Query(..., gt=0, description="Radius in kilometers"),
     year: int = Query(2020, ge=2000, le=2020, description="WorldPop year (2000–2020)"),
     dataset: str = Query("wpgppop", pattern="^(wpgppop|wpgpas)$", description="Dataset (wpgppop recommended)"),
     api_key: Optional[str] = Query(None, description="Optional WorldPop API key"),

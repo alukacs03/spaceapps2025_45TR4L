@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Terv 2.0 – NEO Impact Simulator</title>
+		<link
+			rel="stylesheet"
+			href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+			integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+			crossorigin=""
+		/>
+		<style>
+			:root {
+				--bg: #0b0e14;
+				--panel: #121826;
+				--soft: #1a2333;
+				--text: #e6eefc;
+				--muted: #9fb3c8;
+				--accent: #70a1ff;
+				--accent-2: #48dbfb;
+				--danger: #ff6b6b;
+				--ok: #2ecc71;
+				--warn: #f5a623;
+				--pill: #24324a;
+				--border: #22304a;
+			}
+			html, body {
+				margin: 0;
+				padding: 0;
+				background: var(--bg);
+				color: var(--text);
+				font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+					Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol, Noto Color Emoji;
+			}
+			a { color: var(--accent-2); text-decoration: none; }
+			header {
+				position: sticky; top: 0; z-index: 50;
+				background: linear-gradient(180deg, #0b0e14, #0b0e1400 80%);
+				border-bottom: 1px solid var(--border);
+				backdrop-filter: blur(6px);
+			}
+			.wrap { max-width: 1200px; margin: 0 auto; padding: 18px 20px; }
+			.title {
+				display: flex; align-items: center; gap: 12px;
+			}
+			.title h1 { margin: 0; font-size: 28px; letter-spacing: 0.5px; }
+			.subtitle { color: var(--muted); margin-top: 2px; font-size: 14px; }
+			.grid { display: grid; gap: 16px; }
+			@media (min-width: 960px) { .grid-3 { grid-template-columns: 1fr 1fr 1fr; } }
+			.panel {
+				background: linear-gradient(180deg, var(--panel), var(--soft));
+				border: 1px solid var(--border);
+				border-radius: 12px;
+				padding: 16px;
+				box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+			}
+			.panel h2 { margin: 0 0 10px; font-size: 18px; }
+			.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+			.spacer { height: 8px; }
+			.btn {
+				background: var(--accent);
+				color: white;
+				border: none; border-radius: 10px;
+				padding: 10px 14px;
+				font-weight: 600; cursor: pointer;
+				box-shadow: 0 6px 18px rgba(112,161,255,0.25);
+			}
+			.btn.secondary { background: var(--pill); color: var(--text); box-shadow: none; }
+			.btn.warn { background: var(--warn); }
+			.btn.launch {
+				background: linear-gradient(90deg, #70a1ff, #48dbfb);
+				font-size: 20px; padding: 16px 24px; border-radius: 14px;
+				box-shadow: 0 12px 30px rgba(112,161,255,0.35);
+			}
+			.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+			.tag { background: var(--pill); color: var(--muted); border: 1px solid var(--border); padding: 4px 8px; border-radius: 999px; font-size: 12px; }
+			input, select {
+				background: #0f1420; color: var(--text);
+				border: 1px solid var(--border);
+				border-radius: 10px; padding: 10px 12px;
+			}
+			label { display: inline-block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+			.kpi {
+				display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+			}
+			.kpi .box { background: #0f1420; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+			.kpi .t { color: var(--muted); font-size: 12px; }
+			.kpi .v { font-size: 18px; margin-top: 2px; font-weight: 700; }
+			.list { display: grid; gap: 10px; max-height: 380px; overflow: auto; }
+			.item { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; background: #0f1420; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+			.item .meta { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+			.pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--pill); }
+			.danger { color: var(--danger); }
+			.ok { color: var(--ok); }
+			#map { width: 100%; height: 340px; border-radius: 12px; border: 1px solid var(--border); }
+			.footer-note { color: var(--muted); font-size: 12px; margin-top: 12px; }
+			.stepper { display: flex; gap: 8px; flex-wrap: wrap; }
+			.step { display: flex; align-items: center; gap: 8px; background: #0f1420; border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; }
+			.step .n { width: 22px; height: 22px; border-radius: 999px; background: var(--pill); display: grid; place-items: center; font-weight: 700; }
+			.note { color: var(--muted); font-size: 13px; }
+			.small { font-size: 12px; }
+			.inline { display: inline-flex; gap: 6px; align-items: center; }
+			.hr { height: 1px; background: var(--border); margin: 14px 0; }
+			.right { text-align: right; }
+			.linklike { color: var(--accent-2); cursor: pointer; text-decoration: underline; }
+		</style>
+	</head>
+	<body>
+		<header>
+			<div class="wrap">
+				<div class="title">
+					<svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+						<path d="M12 2l2.39 4.84L20 8l-4 3.9L17 18l-5-2.6L7 18l1-6.1L4 8l5.61-1.16L12 2z" fill="url(#g)"/>
+						<defs>
+							<linearGradient id="g" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+								<stop stop-color="#70a1ff"/>
+								<stop offset="1" stop-color="#48dbfb"/>
+							</linearGradient>
+						</defs>
+					</svg>
+					<h1>Terv 2.0</h1>
+				</div>
+				<div class="subtitle">Interactive NEO impact simulation explorer</div>
+				<div class="spacer"></div>
+				<div class="stepper">
+					<div class="step"><div class="n">1</div> List NEO feed</div>
+					<div class="step"><div class="n">2</div> Pick scenario (today / historical / custom)</div>
+					<div class="step"><div class="n">3</div> Choose impact location</div>
+					<div class="step"><div class="n">4</div> LAUNCH 3D impact</div>
+				</div>
+			</div>
+		</header>
+
+		<main class="wrap" style="padding-bottom: 40px;">
+			<div class="grid grid-3">
+				<section class="panel">
+					<h2>NEO Feed</h2>
+					<div class="row">
+						<div style="flex:1; min-width: 220px;">
+							<label>NASA API key</label>
+							<input id="apiKey" type="text" placeholder="DEMO_KEY" />
+							<div class="small note">Stored locally. Get one at api.nasa.gov</div>
+						</div>
+						<div>
+							<button id="saveKey" class="btn secondary">Save</button>
+						</div>
+					</div>
+					<div class="hr"></div>
+					<div class="row">
+						<button id="loadToday" class="btn">Today's top misses</button>
+						<span class="tag">Closest approaches by miss distance</span>
+					</div>
+					<div class="spacer"></div>
+					<div class="row">
+						<div>
+							<label>Historical range</label><br/>
+							<input id="histStart" type="date" />
+						</div>
+						<div>
+							<label>&nbsp;</label><br/>
+							<input id="histEnd" type="date" />
+						</div>
+						<button id="loadHistorical" class="btn secondary">Historical top misses</button>
+					</div>
+					<div class="spacer"></div>
+					<div class="kpi">
+						<div class="box"><div class="t">Objects</div><div id="kpiCount" class="v">–</div></div>
+						<div class="box"><div class="t">Closest miss (km)</div><div id="kpiClosest" class="v">–</div></div>
+						<div class="box"><div class="t">Potentially hazardous</div><div id="kpiPHA" class="v">–</div></div>
+					</div>
+					<div class="spacer"></div>
+					<div id="feedList" class="list"></div>
+					<div id="progress" class="footer-note"></div>
+				</section>
+
+				<section class="panel">
+					<h2>Custom asteroid</h2>
+					<div class="row">
+						<div style="flex:1; min-width: 140px;">
+							<label>Diameter (m)</label>
+							<input id="custDiameter" type="number" min="1" step="1" value="100" />
+						</div>
+						<div style="flex:1; min-width: 140px;">
+							<label>Velocity (km/s)</label>
+							<input id="custVelocity" type="number" min="0.1" step="0.1" value="17" />
+						</div>
+						<div style="flex:1; min-width: 160px;">
+							<label>Density (kg/m³)</label>
+							<input id="custDensity" type="number" min="500" step="100" value="3000" />
+						</div>
+					</div>
+					<div class="spacer"></div>
+					<div class="row">
+						<button id="calcEnergy" class="btn">Estimate energy</button>
+						<span class="note">Rough educational estimate (TNT equivalent and ballpark crater)</span>
+					</div>
+					<div class="spacer"></div>
+					<div class="kpi">
+						<div class="box"><div class="t">Mass (kg)</div><div id="kMass" class="v">–</div></div>
+						<div class="box"><div class="t">Kinetic energy (TNT eq.)</div><div id="kEnergy" class="v">–</div></div>
+						<div class="box"><div class="t">Crater diameter (km)</div><div id="kCrater" class="v">–</div></div>
+					</div>
+				</section>
+
+				<section class="panel">
+					<h2>Impact location</h2>
+					<div id="map"></div>
+					<div class="spacer"></div>
+					<div class="row">
+						<div>
+							<label>Lat</label><br/>
+							<input id="lat" type="number" step="0.0001" value="0" style="width:130px;"/>
+						</div>
+						<div>
+							<label>Lon</label><br/>
+							<input id="lon" type="number" step="0.0001" value="0" style="width:130px;"/>
+						</div>
+						<div>
+							<label>Rings (km)</label><br/>
+							<input id="rings" type="text" value="5,20,100" style="width:150px;"/>
+						</div>
+					</div>
+					<div class="spacer"></div>
+					<div class="row">
+						<button id="estimatePop" class="btn secondary">Estimate population (beta)</button>
+						<button id="launchBtn" class="btn launch" disabled>LAUNCH</button>
+					</div>
+					<div class="spacer"></div>
+					<div id="popResults" class="list"></div>
+					<div class="footer-note">Tip: if the backend is running, this will call <code>/getPopulation</code>. Otherwise it shows a local-only preview.</div>
+				</section>
+			</div>
+
+			<div class="spacer"></div>
+
+            
+
+			<section class="panel">
+				<h2>About this tool</h2>
+				<p class="note">
+					This is a hackathon prototype for educational and decision-support exploration. It uses NASA NeoWs for NEO data
+					and can query WorldPop via a small API to estimate exposed population by ring distance. For 3D visualization, see the
+					linked viewer. Physics are simplified; values are ballpark estimates, not mission-design outputs.
+				</p>
+			</section>
+		</main>
+
+		<script
+			src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+			integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+			crossorigin=""
+		></script>
+		<script>
+			// --- Utilities ---
+			const $ = (id) => document.getElementById(id);
+			const fmt = new Intl.NumberFormat('en-US');
+			const km = (x) => x == null ? '–' : fmt.format(Math.round(Number(x)));
+			const km2 = (x) => x == null ? '–' : fmt.format(Number(x).toFixed(2));
+			const nt = (x) => x == null ? '–' : fmt.format(Number(x));
+			const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+
+			function storeKey() {
+				const v = $('apiKey').value.trim();
+				if (v) localStorage.setItem('nasa_key', v);
+			}
+			function loadKey() {
+				const v = localStorage.getItem('nasa_key') || 'DEMO_KEY';
+				$('apiKey').value = v;
+				return v;
+			}
+
+			// --- NASA feed ---
+			async function fetchNeoFeed(startDate, endDate) {
+				const key = loadKey();
+				const url = new URL('https://api.nasa.gov/neo/rest/v1/feed');
+				url.searchParams.set('start_date', startDate);
+				url.searchParams.set('end_date', endDate);
+				url.searchParams.set('api_key', key);
+				const res = await fetch(url);
+				if (!res.ok) throw new Error(`NASA feed error ${res.status}`);
+				const data = await res.json();
+				const all = [];
+				const byDate = data.near_earth_objects || {};
+				for (const d of Object.keys(byDate)) {
+					for (const neo of byDate[d]) {
+						for (const ca of neo.close_approach_data || []) {
+							if (!ca.miss_distance || !ca.relative_velocity) continue;
+							all.push({
+								date: d,
+								name: neo.name,
+								id: neo.id,
+								hazardous: !!neo.is_potentially_hazardous_asteroid,
+								diameter_km_min: neo.estimated_diameter?.kilometers?.estimated_diameter_min ?? null,
+								diameter_km_max: neo.estimated_diameter?.kilometers?.estimated_diameter_max ?? null,
+								miss_km: Number(ca.miss_distance.kilometers),
+								vel_kps: Number(ca.relative_velocity.kilometers_per_second),
+								orbiting_body: ca.orbiting_body || '—',
+								approach_time: ca.close_approach_date_full || ca.close_approach_date,
+							});
+						}
+					}
+				}
+				return all;
+			}
+
+			function renderFeed(items) {
+				items.sort((a,b) => a.miss_km - b.miss_km);
+				$('kpiCount').textContent = nt(items.length);
+				$('kpiClosest').textContent = items.length ? km(items[0].miss_km) : '–';
+				$('kpiPHA').textContent = nt(items.filter(x => x.hazardous).length);
+				const list = $('feedList');
+				list.innerHTML = '';
+				for (const it of items.slice(0, 100)) {
+					const el = document.createElement('div');
+					el.className = 'item';
+					el.innerHTML = `
+						<div>
+							<div><strong>${it.name}</strong> <span class="pill">${it.approach_time}</span></div>
+							<div class="meta">
+								<span>Miss: <strong>${km2(it.miss_km)}</strong> km</span>
+								<span>v: ${Number(it.vel_kps).toFixed(2)} km/s</span>
+								<span>dia: ${it.diameter_km_min?.toFixed(3) ?? '–'}–${it.diameter_km_max?.toFixed(3) ?? '–'} km</span>
+								<span>${it.hazardous ? '<span class="danger">PHA</span>' : '<span class="ok">non-PHA</span>'}</span>
+							</div>
+						</div>
+						<div class="right">
+							<button class="btn secondary">Select</button>
+						</div>`;
+					el.querySelector('button').addEventListener('click', () => selectAsteroid(it));
+					list.appendChild(el);
+				}
+			}
+
+			function todayStr() {
+				const d = new Date();
+				const y = d.getFullYear();
+				const m = String(d.getMonth()+1).padStart(2,'0');
+				const dd = String(d.getDate()).padStart(2,'0');
+				return `${y}-${m}-${dd}`;
+			}
+
+			async function loadToday() {
+				try {
+					$('progress').textContent = 'Loading today\'s feed…';
+					const d = todayStr();
+					const items = await fetchNeoFeed(d, d);
+					renderFeed(items);
+					$('progress').textContent = items.length ? '' : 'No close approaches found for today.';
+				} catch (e) {
+					$('progress').textContent = String(e);
+				}
+			}
+
+			function* iterateWeeks(start, end) {
+				const msDay = 86400000;
+				let a = new Date(start);
+				const z = new Date(end);
+				while (a <= z) {
+					const b = new Date(Math.min(a.getTime() + 6*msDay, z.getTime()));
+					const s = a.toISOString().slice(0,10);
+					const e = b.toISOString().slice(0,10);
+					yield [s, e];
+					a = new Date(b.getTime() + msDay);
+				}
+			}
+
+			async function loadHistorical() {
+				const s = $('histStart').value;
+				const e = $('histEnd').value;
+				if (!s || !e) {
+					$('progress').textContent = 'Pick start and end dates.';
+					return;
+				}
+				const chunks = Array.from(iterateWeeks(s, e));
+				const total = chunks.length;
+				let acc = [];
+				for (let i=0;i<total;i++) {
+					const [a,b] = chunks[i];
+					$('progress').textContent = `Fetching ${i+1}/${total} (${a}→${b})…`;
+					// be gentle with DEMO_KEY limits
+					// eslint-disable-next-line no-await-in-loop
+					const items = await fetchNeoFeed(a,b);
+					acc = acc.concat(items);
+					// eslint-disable-next-line no-await-in-loop
+					await new Promise(r => setTimeout(r, 300));
+				}
+				$('progress').textContent = `Fetched ${acc.length} approaches across ${total} week(s).`;
+				renderFeed(acc);
+			}
+
+			// --- Selection state ---
+			let selectedAsteroid = null;
+			function selectAsteroid(it) {
+				selectedAsteroid = it;
+				const name = `${it.name} · miss ${km2(it.miss_km)} km · v ${it.vel_kps.toFixed(2)} km/s`;
+				alert(`Selected: ${name}\nNext, choose an impact location on the map.`);
+				maybeEnableLaunch();
+			}
+
+			// --- Custom physics estimates (very rough) ---
+			function formatTntEqFromMt(mt) {
+				if (mt == null || isNaN(mt)) return '–';
+				const x = Number(mt);
+				if (x >= 1) return x.toFixed(2) + ' Mt';
+				const kt = x * 1e3; if (kt >= 1) return kt.toFixed(2) + ' kt';
+				const t = x * 1e6; if (t >= 1) return t.toFixed(2) + ' t';
+				const kg = x * 1e9; if (kg >= 1) return kg.toFixed(2) + ' kg';
+				return '< 1 kg';
+			}
+			function estimateEnergy() {
+				const d_m = Number($('custDiameter').value || '0');
+				const v_kps = Number($('custVelocity').value || '0');
+				const rho = Number($('custDensity').value || '0');
+				const r = d_m/2;
+				const volume = (4/3)*Math.PI*r*r*r; // m^3
+				const mass = volume * rho; // kg
+				const v = v_kps * 1000; // m/s
+				const KE = 0.5 * mass * v*v; // J
+				const MTNT = KE / 4.184e15; // megaton TNT
+				// Very rough scaling for crater diameter on land (km). Educational only.
+				// D ≈ 0.013 * (KE[J])^(1/3.4)
+				const D_km = 0.013 * Math.pow(KE, 1/3.4) / 1000; // km
+				$('kMass').textContent = nt(Math.round(mass));
+				$('kEnergy').textContent = formatTntEqFromMt(MTNT);
+				$('kCrater').textContent = (D_km > 0 ? D_km.toFixed(2) : '–');
+			}
+
+			// --- Map & rings ---
+			let map, marker;
+			function initMap() {
+				map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
+				L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+					maxZoom: 12,
+					attribution: '&copy; OpenStreetMap contributors'
+				}).addTo(map);
+				marker = L.marker([0,0], { draggable: true }).addTo(map);
+				marker.on('dragend', () => {
+					const p = marker.getLatLng();
+					$('lat').value = p.lat.toFixed(4);
+					$('lon').value = p.lng.toFixed(4);
+				});
+				map.on('click', (e) => {
+					marker.setLatLng(e.latlng);
+					$('lat').value = e.latlng.lat.toFixed(4);
+					$('lon').value = e.latlng.lng.toFixed(4);
+				});
+			}
+
+			async function estimatePopulation() {
+				const lat = Number($('lat').value);
+				const lon = Number($('lon').value);
+				const rings = $('rings').value.split(',').map(s => Number(s.trim())).filter(x => x>0).sort((a,b)=>a-b);
+				const out = $('popResults');
+				out.innerHTML = '';
+				if (!Number.isFinite(lat) || !Number.isFinite(lon) || rings.length === 0) {
+					out.textContent = 'Provide valid lat/lon and at least one ring radius (km).';
+					return;
+				}
+				for (const r of rings) {
+					const row = document.createElement('div');
+					row.className = 'item';
+					row.innerHTML = `<div><strong>Radius ${r} km</strong><div class="meta">Population (WorldPop 2020): <span id="pop-${r}">loading…</span></div></div><div></div>`;
+					out.appendChild(row);
+								try {
+									const base = /^https?:/i.test(window.location.origin) ? window.location.origin : 'http://localhost:8000';
+									const url = new URL('/getPopulation', base);
+						url.searchParams.set('lat', lat);
+						url.searchParams.set('lon', lon);
+						url.searchParams.set('radius', r);
+						url.searchParams.set('year', '2020');
+						url.searchParams.set('dataset', 'wpgppop');
+						const res = await fetch(url);
+						if (!res.ok) throw new Error('backend not available or CORS');
+						const data = await res.json();
+						$(`pop-${r}`).textContent = nt(Math.round(data.population));
+					} catch (e) {
+						$(`pop-${r}`).innerHTML = `<span class="note">${String(e)}</span>`;
+					}
+				}
+			}
+
+			// --- Launch gating ---
+			function hasLocation() {
+				const lat = Number($('lat').value);
+				const lon = Number($('lon').value);
+				return Number.isFinite(lat) && Number.isFinite(lon);
+			}
+			function maybeEnableLaunch() {
+				const ready = !!selectedAsteroid && hasLocation();
+				$('launchBtn').disabled = !ready;
+			}
+			function performLaunch() {
+				if (!$('launchBtn').disabled) {
+					const ctx = {
+						selectedAsteroid,
+						impact: { lat: Number($('lat').value), lon: Number($('lon').value) },
+						rings: $('rings').value
+					};
+					localStorage.setItem('terv_ctx', JSON.stringify(ctx));
+					window.location.href = 'asteroid.html';
+				}
+			}
+
+			// --- Wire up UI ---
+			window.addEventListener('DOMContentLoaded', () => {
+				loadKey();
+				$('saveKey').addEventListener('click', storeKey);
+				$('loadToday').addEventListener('click', loadToday);
+				$('loadHistorical').addEventListener('click', loadHistorical);
+				$('calcEnergy').addEventListener('click', estimateEnergy);
+				$('estimatePop').addEventListener('click', estimatePopulation);
+				$('launchBtn').addEventListener('click', performLaunch);
+				['lat','lon'].forEach(id => $(id).addEventListener('input', maybeEnableLaunch));
+				initMap();
+				// prefill historical range with last 7 days
+				const now = new Date();
+				const a = new Date(now.getTime() - 6*86400000);
+				$('histStart').value = a.toISOString().slice(0,10);
+				$('histEnd').value = now.toISOString().slice(0,10);
+				maybeEnableLaunch();
+			});
+		</script>
+	</body>
+	</html>

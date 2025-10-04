@@ -41,8 +41,11 @@
     let rings = [];
 
     const globe = Globe()
-        .globeImageUrl('./resources/8k_earth_nightmap.jpg')
+        .globeImageUrl('./resources/8081_earthlights10k.jpg')
+        .bumpImageUrl('./resources/8081_earthbump10k.jpg')
         .pointsData([{lat: 40, lng: -74, size: 1.5, color: 'red'}])
+        .showAtmosphere(true)
+        .atmosphereAltitude(0.175)
         .ringsData(rings)
         .ringColor(r => t => {
             const age = Date.now() - r.createdAt;
@@ -53,6 +56,14 @@
         .ringPropagationSpeed('propagationSpeed')
         .ringRepeatPeriod('repeatPeriod')
         (document.getElementById('globeViz'));
+
+    const globeMaterial = globe.globeMaterial();
+    globeMaterial.bumpScale = 30;
+    new THREE.TextureLoader().load('./resources/8081_earthspec10k.jpg', texture => {
+        globeMaterial.specularMap = texture;
+        globeMaterial.shininess = 30;
+    });
+
     const scene = globe.scene();
     const camera = globe.camera();
     const renderer = globe.renderer();
@@ -88,52 +99,74 @@
         constructor(radius = 10, position = new THREE.Vector3(0, 0, 0), target = new THREE.Vector3(0, 0, 0), speed = 5) {
             this.mesh = new THREE.Mesh(
                 new THREE.SphereGeometry(radius, 32, 32),
-                new THREE.MeshStandardMaterial({color: 0x888888})
+                new THREE.MeshStandardMaterial({ color: 0x888888 })
             );
 
             this.mesh.position.copy(position);
             this.direction = target.clone().sub(position).normalize();
             this.speed = speed;
             this.radius = radius;
-
             this.isKaboom = false;
 
             this.EARTH = globe;
+
+            const direction = target.clone().sub(position).normalize();
+            const trajectoryEnd = position.clone().add(direction.multiplyScalar(10000));
+            const points = [position.clone(), trajectoryEnd];
+
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+
+            const material = new THREE.LineDashedMaterial({
+                color: 0x888888,
+                dashSize: 20,
+                gapSize: 20,
+                linewidth: 1.2,
+                transparent: true,
+                opacity: 0.4
+            });
+
+            this.trajectory = new THREE.Line(geometry, material);
+            this.trajectory.computeLineDistances();
+
+            scene.add(this.mesh);
+            scene.add(this.trajectory);
         }
 
-        checkCollision() {
-            const distance = this.mesh.position.length();
-            if (distance <= ETALON + this.radius && !this.isKaboom) {
+        checkCollision(prevPos) {
+            if (this.isKaboom) return false;
+
+            const ray = new THREE.Ray(prevPos, this.mesh.position.clone().sub(prevPos).normalize());
+            const distance = prevPos.distanceTo(this.mesh.position);
+
+            const hit = ray.intersectSphere(new THREE.Sphere(EARTH_CENTER, ETALON + this.radius), new THREE.Vector3());
+            if (hit && prevPos.distanceTo(hit) <= distance) {
                 this.isKaboom = true;
-                console.log("Kaboom");
-
-                const { lat, lng } = cartesianToLatLng(this.mesh.position);
-
-                const now = Date.now();
+                const { lat, lng } = cartesianToLatLng(hit);
 
                 rings.push({
                     lat,
                     lng,
                     maxR: 300,
-                    propagationSpeed: Math.random() * 10,
-                    repeatPeriod: 0,
+                    propagationSpeed: 10,
+                    repeatPeriod: 0.1,
                     color: 'red',
-                    createdAt: now,
-                    lifetime: 4000
+                    createdAt: Date.now(),
+                    lifetime: 2000
                 });
                 globe.ringsData(rings);
 
                 scene.remove(this.mesh);
+                scene.remove(this.trajectory);
                 return true;
             }
+
             return false;
         }
 
         animate() {
-            if (this.checkCollision()) {
-                scene.remove(this.mesh);
-            }
+            const prevPos = this.mesh.position.clone();
             this.mesh.position.add(this.direction.clone().multiplyScalar(this.speed));
+            this.checkCollision(prevPos);
         }
     }
 
@@ -164,23 +197,23 @@
         scene.add(zArrow);
 
         const gridHelperX = new THREE.GridHelper(ETALON * 100, ETALON);
-        gridHelperX.material.opacity = 0.25;
+        gridHelperX.material.opacity = 0.2;
         gridHelperX.material.transparent = true;
         scene.add(gridHelperX);
 
         const gridHelperY = new THREE.GridHelper(ETALON * 100, ETALON);
         gridHelperY.rotation.x = Math.PI / 2;
-        gridHelperY.material.opacity = 0.25;
+        gridHelperY.material.opacity = 0.2;
         gridHelperY.material.transparent = true;
         scene.add(gridHelperY);
 
         const gridHelperZ = new THREE.GridHelper(ETALON * 100, ETALON);
         gridHelperZ.rotation.z = Math.PI / 2;
-        gridHelperZ.material.opacity = 0.25;
+        gridHelperZ.material.opacity = 0.2;
         gridHelperZ.material.transparent = true;
         scene.add(gridHelperZ);
 
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; i < 10; i++) {
             const pos = new THREE.Vector3(
                 (Math.random() - 0.5) * 8000,
                 (Math.random() - 0.5) * 8000,
@@ -189,12 +222,19 @@
 
             const radius = 5 + Math.random() * (15 - 5);
 
-            const speed = 1 + Math.random() * (10 - 1);
+            const speed = 5 + Math.random() * (10 - 5);
+            const targetVariation = new THREE.Vector3(
+                (Math.random()-0.5)*300,
+                (Math.random()-0.5)*300,
+                (Math.random()-0.5)*300
+            );
+            const target = EARTH_CENTER.clone().add(targetVariation);
 
-            const asteroid = new Asteroid(radius, pos, EARTH_CENTER, speed);
+            const asteroid = new Asteroid(radius, pos, target, speed);
             asteroids.push(asteroid);
             scene.add(asteroid.mesh);
-        }    })();
+        }
+    })();
     //===========================================================================
 
     // Main

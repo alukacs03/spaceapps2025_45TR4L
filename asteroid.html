@@ -37,9 +37,21 @@
     //===========================================================================
 
     //Globals
+    const N = 10;
+    let rings = [];
+
     const globe = Globe()
-        .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
+        .globeImageUrl('./resources/8k_earth_nightmap.jpg')
         .pointsData([{lat: 40, lng: -74, size: 1.5, color: 'red'}])
+        .ringsData(rings)
+        .ringColor(r => t => {
+            const age = Date.now() - r.createdAt;
+            const alpha = Math.max(0, 1 - age / r.lifetime); // fades out
+            return `rgba(255,0,0,${alpha})`;
+        })
+        .ringMaxRadius('maxR')
+        .ringPropagationSpeed('propagationSpeed')
+        .ringRepeatPeriod('repeatPeriod')
         (document.getElementById('globeViz'));
     const scene = globe.scene();
     const camera = globe.camera();
@@ -47,6 +59,29 @@
 
     let asteroids = [];
     //===========================================================================
+
+    //Functions
+    function cartesianToLatLng(pos, radius = ETALON) {
+        const x = pos.x / radius;
+        const y = pos.y / radius;
+        const z = pos.z / radius;
+
+        const lat = Math.asin(y) * 180 / Math.PI;
+        const lng = Math.atan2(x, z) * 180 / Math.PI;
+
+        return { lat, lng };
+    }
+    function updateRings() {
+        const now = Date.now();
+
+        for (let i = rings.length - 1; i >= 0; i--) {
+            if (now - rings[i].createdAt >= rings[i].lifetime) {
+                rings.splice(i, 1);
+            }
+        }
+
+        globe.ringsData([...rings]);
+    }    //===========================================================================
 
     //Classes
     class Asteroid {
@@ -59,9 +94,45 @@
             this.mesh.position.copy(position);
             this.direction = target.clone().sub(position).normalize();
             this.speed = speed;
+            this.radius = radius;
+
+            this.isKaboom = false;
+
+            this.EARTH = globe;
+        }
+
+        checkCollision() {
+            const distance = this.mesh.position.length();
+            if (distance <= ETALON + this.radius && !this.isKaboom) {
+                this.isKaboom = true;
+                console.log("Kaboom");
+
+                const { lat, lng } = cartesianToLatLng(this.mesh.position);
+
+                const now = Date.now();
+
+                rings.push({
+                    lat,
+                    lng,
+                    maxR: 300,
+                    propagationSpeed: Math.random() * 10,
+                    repeatPeriod: 0,
+                    color: 'red',
+                    createdAt: now,
+                    lifetime: 4000
+                });
+                globe.ringsData(rings);
+
+                scene.remove(this.mesh);
+                return true;
+            }
+            return false;
         }
 
         animate() {
+            if (this.checkCollision()) {
+                scene.remove(this.mesh);
+            }
             this.mesh.position.add(this.direction.clone().multiplyScalar(this.speed));
         }
     }
@@ -71,7 +142,7 @@
         camera.position.set(600, 300, 600);
 
         scene.add(new THREE.AmbientLight(0xffffff, 10));
-        const sunLight = new THREE.DirectionalLight(0xffffff, 2);
+        const sunLight = new THREE.DirectionalLight(0xffffff, 100);
         sunLight.position.set(5000, 10000, 3000);
         scene.add(sunLight);
 
@@ -109,7 +180,7 @@
         gridHelperZ.material.transparent = true;
         scene.add(gridHelperZ);
 
-        for (let i = 0; i < 100; i++) {
+        for (let i = 0; i < 20; i++) {
             const pos = new THREE.Vector3(
                 (Math.random() - 0.5) * 8000,
                 (Math.random() - 0.5) * 8000,
@@ -130,6 +201,7 @@
     (function animate() {
         requestAnimationFrame(animate);
         asteroids.forEach((a)=>a.animate());
+        updateRings();
     })();
 </script>
 </body>

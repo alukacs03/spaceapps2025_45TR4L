@@ -41,22 +41,22 @@
     //===========================================================================
 
     //Globals
-    const N = 10;
+    const N = 30;
     let rings = [];
     let asteroidTemplate = null; // <— declare it
     const clock = new THREE.Clock(); // <— add delta-time clock
 
 
     const globe = Globe()
-        .globeImageUrl('./resources/8081_earthlights10k.jpg')
+        .globeImageUrl('./resources/8081_earthmap10k.jpg')
         .bumpImageUrl('./resources/8081_earthbump10k.jpg')
         .pointsData([{lat: 40, lng: -74, size: 1.5, color: 'red'}])
         .showAtmosphere(true)
-        .atmosphereAltitude(0.175)
+        .atmosphereAltitude(0.275)
         .ringsData(rings)
         .ringColor(r => t => {
             const age = Date.now() - r.createdAt;
-            const alpha = Math.max(0, 1 - age / r.lifetime); // fades out
+            const alpha = Math.max(0, 1 - age / r.lifetime);
             return `rgba(255,0,0,${alpha})`;
         })
         .ringMaxRadius('maxR')
@@ -99,7 +99,8 @@
         }
 
         globe.ringsData([...rings]);
-    }    //===========================================================================
+    }
+    //===========================================================================
 
     //Classes
     class Asteroid {
@@ -215,49 +216,30 @@
     }
 
     //Init
-    (function init() {
+
+    globe.onGlobeReady(() => {
+        // Init logic here
         const loader = new GLTFLoader();
-        
         camera.position.set(600, 300, 600);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 10));
-        const sunLight = new THREE.DirectionalLight(0xffffff, 100);
+        const sunLight = new THREE.DirectionalLight(0xffffff, 10);
         sunLight.position.set(5000, 10000, 3000);
         scene.add(sunLight);
 
+        // Axes helpers
         const origin = new THREE.Vector3(0, 0, 0);
-        const length = 300;
-        const headLength = 20;
-        const headWidth = 10;
+        const length = 300, headLength = 20, headWidth = 10;
 
-        const xDir = new THREE.Vector3(1, 0, 0);
-        const xArrow = new THREE.ArrowHelper(xDir, origin, length, 0xff0000, headLength, headWidth);
-        scene.add(xArrow);
+        const xArrow = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), origin, length, 0xff0000, headLength, headWidth);
+        const yArrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), origin, length, 0x00ff00, headLength, headWidth);
+        const zArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), origin, length, 0x0000ff, headLength, headWidth);
+        scene.add(xArrow, yArrow, zArrow);
 
-        const yDir = new THREE.Vector3(0, 1, 0);
-        const yArrow = new THREE.ArrowHelper(yDir, origin, length, 0x00ff00, headLength, headWidth);
-        scene.add(yArrow);
-
-        const zDir = new THREE.Vector3(0, 0, 1);
-        const zArrow = new THREE.ArrowHelper(zDir, origin, length, 0x0000ff, headLength, headWidth);
-        scene.add(zArrow);
-
-        const gridHelperX = new THREE.GridHelper(ETALON * 100, ETALON);
-        gridHelperX.material.opacity = 0.2;
-        gridHelperX.material.transparent = true;
-        scene.add(gridHelperX);
-
-        const gridHelperY = new THREE.GridHelper(ETALON * 100, ETALON);
-        gridHelperY.rotation.x = Math.PI / 2;
-        gridHelperY.material.opacity = 0.2;
-        gridHelperY.material.transparent = true;
-        scene.add(gridHelperY);
-
-        const gridHelperZ = new THREE.GridHelper(ETALON * 100, ETALON);
-        gridHelperZ.rotation.z = Math.PI / 2;
-        gridHelperZ.material.opacity = 0.2;
-        gridHelperZ.material.transparent = true;
-        scene.add(gridHelperZ);
+        // Grid helpers
+        const gridHelperX = new THREE.GridHelper(ETALON * 100, ETALON); gridHelperX.material.opacity = 0.2; gridHelperX.material.transparent = true;
+        const gridHelperY = new THREE.GridHelper(ETALON * 100, ETALON); gridHelperY.rotation.x = Math.PI / 2; gridHelperY.material.opacity = 0.2; gridHelperY.material.transparent = true;
+        const gridHelperZ = new THREE.GridHelper(ETALON * 100, ETALON); gridHelperZ.rotation.z = Math.PI / 2; gridHelperZ.material.opacity = 0.2; gridHelperZ.material.transparent = true;
+        scene.add(gridHelperX, gridHelperY, gridHelperZ);
 
         loader.load('./models/asteroid.glb', (gltf) => {
             asteroidTemplate = gltf.scene;

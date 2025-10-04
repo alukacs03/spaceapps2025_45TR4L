@@ -25,8 +25,7 @@
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
         "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-      
-        }
+      }
     }
 </script>
 <script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
@@ -34,18 +33,13 @@
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-
-    //Constants
     const ETALON = 100;
     const EARTH_CENTER = new THREE.Vector3(0, 0, 0);
-    //===========================================================================
-
-    //Globals
-    const N = 30;
+    const N = 10;
     let rings = [];
-    let asteroidTemplate = null; // <— declare it
-    const clock = new THREE.Clock(); // <— add delta-time clock
-
+    let asteroidTemplate = null;
+    const clock = new THREE.Clock();
+    let asteroids = [];
 
     const globe = Globe()
         .globeImageUrl('./resources/8081_earthmap10k.jpg')
@@ -75,70 +69,45 @@
     const camera = globe.camera();
     const renderer = globe.renderer();
 
-    let asteroids = [];
-    //===========================================================================
-
-    //Functions
     function cartesianToLatLng(pos, radius = ETALON) {
         const x = pos.x / radius;
         const y = pos.y / radius;
         const z = pos.z / radius;
-
         const lat = Math.asin(y) * 180 / Math.PI;
         const lng = Math.atan2(x, z) * 180 / Math.PI;
-
         return { lat, lng };
     }
+
     function updateRings() {
         const now = Date.now();
-
         for (let i = rings.length - 1; i >= 0; i--) {
             if (now - rings[i].createdAt >= rings[i].lifetime) {
                 rings.splice(i, 1);
             }
         }
-
         globe.ringsData([...rings]);
     }
-    //===========================================================================
 
-    //Classes
     class Asteroid {
-        constructor(radius = 10, position = new THREE.Vector3(0, 0, 0), target = new THREE.Vector3(0, 0, 0), speed = 5, modelTemplate = null, opts = {}) {
-            const {
-                scale = 1,
-                initialEuler = null,
-                spinAxis = null,
-                spinSpeed = 0
-            } = opts;
-            
+        constructor(radius = 10, position = new THREE.Vector3(0,0,0), target = new THREE.Vector3(0,0,0), speed = 5, modelTemplate = null, opts = {}) {
+            const { scale = 1, initialEuler = null, spinAxis = null, spinSpeed = 0 } = opts;
+
             if (modelTemplate) {
                 this.mesh = modelTemplate.clone(true);
                 this.mesh.traverse(o => {
                     if (o.isMesh) {
                         o.castShadow = true;
                         o.receiveShadow = true;
-                        if (o.material) {
-                            o.material.metalness = o.material.metalness ?? 0.2;
-                            o.material.roughness = o.material.roughness ?? 0.7;
-                        }
-                    }
-                    this.mesh.scale.multiplyScalar(scale);
-                    if (initialEuler) {
-                        this.mesh.rotation.copy(initialEuler);
-                    } else {
-                        this.mesh.rotation.set(
-                            Math.random() * 2 * Math.PI,
-                            Math.random() * 2 * Math.PI,
-                            Math.random() * 2 * Math.PI
-                        );
                     }
                 });
+                this.mesh.scale.multiplyScalar(scale);
+                if (initialEuler) this.mesh.rotation.copy(initialEuler);
+                else this.mesh.rotation.set(Math.random()*2*Math.PI, Math.random()*2*Math.PI, Math.random()*2*Math.PI);
             } else {
                 this.mesh = new THREE.Mesh(
-                new THREE.SphereGeometry(radius, 32, 32),
-                new THREE.MeshStandardMaterial({ color: 0x888888 })
-            );
+                    new THREE.SphereGeometry(radius, 32, 32),
+                    new THREE.MeshStandardMaterial({ color: 0x888888 })
+                );
             }
 
             this.mesh.position.copy(position);
@@ -146,18 +115,11 @@
             this.speed = speed;
             this.radius = radius;
             this.isKaboom = false;
-
             this.spinAxis = (spinAxis ?? new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5)).normalize();
             this.spinSpeed = spinSpeed;
 
-            this.EARTH = globe;
-
-            const direction = target.clone().sub(position).normalize();
-            const trajectoryEnd = position.clone().add(direction.multiplyScalar(10000));
-            const points = [position.clone(), trajectoryEnd];
-
-            const geometry = new THREE.BufferGeometry().setFromPoints(points);
-
+            const trajectoryEnd = position.clone().add(this.direction.clone().multiplyScalar(10000));
+            const geometry = new THREE.BufferGeometry().setFromPoints([position.clone(), trajectoryEnd]);
             const material = new THREE.LineDashedMaterial({
                 color: 0x888888,
                 dashSize: 20,
@@ -166,7 +128,6 @@
                 transparent: true,
                 opacity: 0.4
             });
-
             this.trajectory = new THREE.Line(geometry, material);
             this.trajectory.computeLineDistances();
 
@@ -176,85 +137,80 @@
 
         checkCollision(prevPos) {
             if (this.isKaboom) return false;
-
             const ray = new THREE.Ray(prevPos, this.mesh.position.clone().sub(prevPos).normalize());
             const distance = prevPos.distanceTo(this.mesh.position);
-
             const hit = ray.intersectSphere(new THREE.Sphere(EARTH_CENTER, ETALON + this.radius), new THREE.Vector3());
             if (hit && prevPos.distanceTo(hit) <= distance) {
                 this.isKaboom = true;
                 const { lat, lng } = cartesianToLatLng(hit);
-
-                rings.push({
-                    lat,
-                    lng,
-                    maxR: 300,
-                    propagationSpeed: 10,
-                    repeatPeriod: 0.1,
-                    color: 'red',
-                    createdAt: Date.now(),
-                    lifetime: 2000
-                });
+                rings.push({ lat, lng, maxR:300, propagationSpeed:10, repeatPeriod:0.1, color:'red', createdAt: Date.now(), lifetime:2000 });
                 globe.ringsData(rings);
-
                 scene.remove(this.mesh);
                 scene.remove(this.trajectory);
                 return true;
             }
-
             return false;
         }
 
         animate(dt = 1/60) {
-            if (this.spinSpeed !== 0) {
-                this.mesh.rotateOnAxis(this.spinAxis, this.spinSpeed * dt)
-            }
+            if (this.spinSpeed !== 0) this.mesh.rotateOnAxis(this.spinAxis, this.spinSpeed * dt);
             const prevPos = this.mesh.position.clone();
             this.mesh.position.add(this.direction.clone().multiplyScalar(this.speed * dt));
             this.checkCollision(prevPos);
         }
     }
 
-    //Init
-
     globe.onGlobeReady(() => {
-        // Init logic here
         const loader = new GLTFLoader();
         camera.position.set(600, 300, 600);
 
-        const sunLight = new THREE.DirectionalLight(0xffffff, 10);
-        sunLight.position.set(5000, 10000, 3000);
+        // Lights
+        const sunLight = new THREE.DirectionalLight(0xffffff, 2);
+        sunLight.position.set(1000,1000,1000);
         scene.add(sunLight);
+        const hemisphere = new THREE.HemisphereLight(0xffffff, 0x444444, 1.5);
+        scene.add(hemisphere);
 
-        // Axes helpers
-        const origin = new THREE.Vector3(0, 0, 0);
-        const length = 300, headLength = 20, headWidth = 10;
+        renderer.shadowMap.enabled = true;
 
-        const xArrow = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), origin, length, 0xff0000, headLength, headWidth);
-        const yArrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), origin, length, 0x00ff00, headLength, headWidth);
-        const zArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), origin, length, 0x0000ff, headLength, headWidth);
-        scene.add(xArrow, yArrow, zArrow);
+        // Coordinate system arrows
+        const origin = new THREE.Vector3(0,0,0);
+        const length = 300, headLength=20, headWidth=10;
+        scene.add(new THREE.ArrowHelper(new THREE.Vector3(1,0,0), origin, length, 0xff0000, headLength, headWidth));
+        scene.add(new THREE.ArrowHelper(new THREE.Vector3(0,1,0), origin, length, 0x00ff00, headLength, headWidth));
+        scene.add(new THREE.ArrowHelper(new THREE.Vector3(0,0,1), origin, length, 0x0000ff, headLength, headWidth));
 
         // Grid helpers
-        const gridHelperX = new THREE.GridHelper(ETALON * 100, ETALON); gridHelperX.material.opacity = 0.2; gridHelperX.material.transparent = true;
-        const gridHelperY = new THREE.GridHelper(ETALON * 100, ETALON); gridHelperY.rotation.x = Math.PI / 2; gridHelperY.material.opacity = 0.2; gridHelperY.material.transparent = true;
-        const gridHelperZ = new THREE.GridHelper(ETALON * 100, ETALON); gridHelperZ.rotation.z = Math.PI / 2; gridHelperZ.material.opacity = 0.2; gridHelperZ.material.transparent = true;
-        scene.add(gridHelperX, gridHelperY, gridHelperZ);
+        const gridX = new THREE.GridHelper(ETALON*100, ETALON); gridX.material.opacity=0.2; gridX.material.transparent=true;
+        const gridY = new THREE.GridHelper(ETALON*100, ETALON); gridY.rotation.x = Math.PI/2; gridY.material.opacity=0.2; gridY.material.transparent=true;
+        const gridZ = new THREE.GridHelper(ETALON*100, ETALON); gridZ.rotation.z = Math.PI/2; gridZ.material.opacity=0.2; gridZ.material.transparent=true;
+        scene.add(gridX, gridY, gridZ);
 
-        loader.load('./models/asteroid.glb', (gltf) => {
+        loader.load('./models/asteroid.glb', gltf => {
             asteroidTemplate = gltf.scene;
-
+            asteroidTemplate.traverse(o => {
+                if (o.isMesh) {
+                    o.castShadow = true;
+                    o.receiveShadow = true;
+                    o.material = new THREE.MeshStandardMaterial({
+                        color: 0x888888,
+                        roughness: 0.5,
+                        metalness: 0.6,
+                        emissive: 0x222222,
+                        emissiveIntensity: 0.8
+                    });
+                }
+            });
             asteroidTemplate.scale.setScalar(1);
 
             for (let i = 0; i < N; i++) {
                 const pos = new THREE.Vector3(
-                    (Math.random() - 0.5) * 8000,
-                    (Math.random() - 0.5) * 8000,
-                    (Math.random() - 0.5) * 8000
+                    (Math.random()-0.5)*8000,
+                    (Math.random()-0.5)*8000,
+                    (Math.random()-0.5)*8000
                 );
-
-                const radius = 5 + Math.random() * (15 - 5);
-                const speed = THREE.MathUtils.randFloat(300,900);
+                const radius = 5 + Math.random()*(15-5);
+                const speed = THREE.MathUtils.randFloat(200,300);
                 const scale = THREE.MathUtils.randFloat(1,2);
                 const spinAxis = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize();
                 const spinSpeed = THREE.MathUtils.randFloat(0.3,1.2);
@@ -268,15 +224,14 @@
                 const asteroid = new Asteroid(radius, pos, target, speed, asteroidTemplate, { scale, spinAxis, spinSpeed });
                 asteroids.push(asteroid);
             }
-        }, undefined, (e) => console.error('GLB load error:', e));
+        });
     });
-    //===========================================================================
 
-    // Main
+    // Main animation loop
     (function animate() {
         requestAnimationFrame(animate);
         const dt = clock.getDelta();
-        asteroids.forEach((a)=>a.animate(dt));
+        asteroids.forEach(a => a.animate(dt));
         updateRings();
     })();
 </script>

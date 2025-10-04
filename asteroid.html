@@ -23,13 +23,17 @@
 <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
-      }
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      
+        }
     }
 </script>
 <script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
 <script type="module">
     import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
 
     //Constants
     const ETALON = 100;
@@ -39,6 +43,9 @@
     //Globals
     const N = 10;
     let rings = [];
+    let asteroidTemplate = null; // <— declare it
+    const clock = new THREE.Clock(); // <— add delta-time clock
+
 
     const globe = Globe()
         .globeImageUrl('./resources/8081_earthlights10k.jpg')
@@ -96,17 +103,51 @@
 
     //Classes
     class Asteroid {
-        constructor(radius = 10, position = new THREE.Vector3(0, 0, 0), target = new THREE.Vector3(0, 0, 0), speed = 5) {
-            this.mesh = new THREE.Mesh(
+        constructor(radius = 10, position = new THREE.Vector3(0, 0, 0), target = new THREE.Vector3(0, 0, 0), speed = 5, modelTemplate = null, opts = {}) {
+            const {
+                scale = 1,
+                initialEuler = null,
+                spinAxis = null,
+                spinSpeed = 0
+            } = opts;
+            
+            if (modelTemplate) {
+                this.mesh = modelTemplate.clone(true);
+                this.mesh.traverse(o => {
+                    if (o.isMesh) {
+                        o.castShadow = true;
+                        o.receiveShadow = true;
+                        if (o.material) {
+                            o.material.metalness = o.material.metalness ?? 0.2;
+                            o.material.roughness = o.material.roughness ?? 0.7;
+                        }
+                    }
+                    this.mesh.scale.multiplyScalar(scale);
+                    if (initialEuler) {
+                        this.mesh.rotation.copy(initialEuler);
+                    } else {
+                        this.mesh.rotation.set(
+                            Math.random() * 2 * Math.PI,
+                            Math.random() * 2 * Math.PI,
+                            Math.random() * 2 * Math.PI
+                        );
+                    }
+                });
+            } else {
+                this.mesh = new THREE.Mesh(
                 new THREE.SphereGeometry(radius, 32, 32),
                 new THREE.MeshStandardMaterial({ color: 0x888888 })
             );
+            }
 
             this.mesh.position.copy(position);
             this.direction = target.clone().sub(position).normalize();
             this.speed = speed;
             this.radius = radius;
             this.isKaboom = false;
+
+            this.spinAxis = (spinAxis ?? new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5)).normalize();
+            this.spinSpeed = spinSpeed;
 
             this.EARTH = globe;
 
@@ -163,15 +204,20 @@
             return false;
         }
 
-        animate() {
+        animate(dt = 1/60) {
+            if (this.spinSpeed !== 0) {
+                this.mesh.rotateOnAxis(this.spinAxis, this.spinSpeed * dt)
+            }
             const prevPos = this.mesh.position.clone();
-            this.mesh.position.add(this.direction.clone().multiplyScalar(this.speed));
+            this.mesh.position.add(this.direction.clone().multiplyScalar(this.speed * dt));
             this.checkCollision(prevPos);
         }
     }
 
     //Init
     (function init() {
+        const loader = new GLTFLoader();
+        
         camera.position.set(600, 300, 600);
 
         scene.add(new THREE.AmbientLight(0xffffff, 10));
@@ -213,34 +259,42 @@
         gridHelperZ.material.transparent = true;
         scene.add(gridHelperZ);
 
-        for (let i = 0; i < 10; i++) {
-            const pos = new THREE.Vector3(
-                (Math.random() - 0.5) * 8000,
-                (Math.random() - 0.5) * 8000,
-                (Math.random() - 0.5) * 8000
-            );
+        loader.load('./models/asteroid.glb', (gltf) => {
+            asteroidTemplate = gltf.scene;
 
-            const radius = 5 + Math.random() * (15 - 5);
+            asteroidTemplate.scale.setScalar(1);
 
-            const speed = 5 + Math.random() * (10 - 5);
-            const targetVariation = new THREE.Vector3(
-                (Math.random()-0.5)*300,
-                (Math.random()-0.5)*300,
-                (Math.random()-0.5)*300
-            );
-            const target = EARTH_CENTER.clone().add(targetVariation);
+            for (let i = 0; i < N; i++) {
+                const pos = new THREE.Vector3(
+                    (Math.random() - 0.5) * 8000,
+                    (Math.random() - 0.5) * 8000,
+                    (Math.random() - 0.5) * 8000
+                );
 
-            const asteroid = new Asteroid(radius, pos, target, speed);
-            asteroids.push(asteroid);
-            scene.add(asteroid.mesh);
-        }
+                const radius = 5 + Math.random() * (15 - 5);
+                const speed = THREE.MathUtils.randFloat(300,900);
+                const scale = THREE.MathUtils.randFloat(1,2);
+                const spinAxis = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize();
+                const spinSpeed = THREE.MathUtils.randFloat(0.3,1.2);
+                const targetVariation = new THREE.Vector3(
+                    (Math.random()-0.5)*300,
+                    (Math.random()-0.5)*300,
+                    (Math.random()-0.5)*300
+                );
+                const target = EARTH_CENTER.clone().add(targetVariation);
+
+                const asteroid = new Asteroid(radius, pos, target, speed, asteroidTemplate, { scale, spinAxis, spinSpeed });
+                asteroids.push(asteroid);
+            }
+        }, undefined, (e) => console.error('GLB load error:', e));
     })();
     //===========================================================================
 
     // Main
     (function animate() {
         requestAnimationFrame(animate);
-        asteroids.forEach((a)=>a.animate());
+        const dt = clock.getDelta();
+        asteroids.forEach((a)=>a.animate(dt));
         updateRings();
     })();
 </script>

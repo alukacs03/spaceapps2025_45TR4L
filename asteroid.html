@@ -23,31 +23,97 @@
 <script type="module">
     import * as THREE from 'three';
 
+    //Globals
     const globe = Globe()
         .globeImageUrl('//unpkg.com/three-globe/example/img/earth-night.jpg')
         .pointsData([{ lat: 40, lng: -74, size: 1.5, color: 'red' }])
         (document.getElementById('globeViz'));
 
+    const ETALON = 100;
+
     const scene = globe.scene();
     const camera = globe.camera();
     const renderer = globe.renderer();
+    //===========================================================================
 
-    scene.add(new THREE.AmbientLight(0xffffff, 10));
-    const sunLight = new THREE.DirectionalLight(0xffffff, 2);
-    sunLight.position.set(5000, 10000, 3000);
-    scene.add(sunLight);
+    //Init
+    (function init() {
+        camera.position.set(600, 300, 600);
 
-    const asteroidGeo = new THREE.SphereGeometry(50, 32, 32);
-    const asteroidMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
-    const asteroid = new THREE.Mesh(asteroidGeo, asteroidMat);
-    asteroid.position.set(800, 0, 0);
-    scene.add(asteroid);
+        scene.add(new THREE.AmbientLight(0xffffff, 10));
+        const sunLight = new THREE.DirectionalLight(0xffffff, 2);
+        sunLight.position.set(5000, 10000, 3000);
+        scene.add(sunLight);
+
+        const origin = new THREE.Vector3(0, 0, 0);
+        const length = 300;
+        const headLength = 20;
+        const headWidth = 10;
+
+        const xDir = new THREE.Vector3(1, 0, 0);
+        const xArrow = new THREE.ArrowHelper(xDir, origin, length, 0xff0000, headLength, headWidth);
+        scene.add(xArrow);
+
+        const yDir = new THREE.Vector3(0, 1, 0);
+        const yArrow = new THREE.ArrowHelper(yDir, origin, length, 0x00ff00, headLength, headWidth);
+        scene.add(yArrow);
+
+        const zDir = new THREE.Vector3(0, 0, 1);
+        const zArrow = new THREE.ArrowHelper(zDir, origin, length, 0x0000ff, headLength, headWidth);
+        scene.add(zArrow);
+
+        const gridHelperX = new THREE.GridHelper(ETALON * 100, ETALON);
+        gridHelperX.material.opacity = 0.25;
+        gridHelperX.material.transparent = true;
+        scene.add(gridHelperX);
+
+        const gridHelperY = new THREE.GridHelper(ETALON * 100, ETALON);
+        gridHelperY.rotation.x = Math.PI / 2;
+        gridHelperY.material.opacity = 0.25;
+        gridHelperY.material.transparent = true;
+        scene.add(gridHelperY);
+
+        const gridHelperZ = new THREE.GridHelper(ETALON * 100, ETALON);
+        gridHelperZ.rotation.z = Math.PI / 2;
+        gridHelperZ.material.opacity = 0.25;
+        gridHelperZ.material.transparent = true;
+        scene.add(gridHelperZ);
+    })();
+    //===========================================================================
+
+    //Classes
+    class Asteroid {
+        constructor(position = new THREE.Vector3(0, 0, 0), target = new THREE.Vector3(0, 0, 0), speed = 5) {
+            this.mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(10, 32, 32),
+                new THREE.MeshStandardMaterial({ color: 0x888888 })
+            );
+
+            this.mesh.position.copy(position);
+
+            // Direction points from current position to target (Earth)
+            this.direction = target.clone().sub(position).normalize();
+
+            this.speed = speed;
+        }
+
+        animate() {
+            this.mesh.position.add(this.direction.clone().multiplyScalar(this.speed));
+        }
+    }
+
+    const earthCenter = new THREE.Vector3(0, 0, 0);
+
+    const asteroid = new Asteroid(
+        new THREE.Vector3(2000, 2000, 1000),
+        earthCenter,
+        10
+    );
+    scene.add(asteroid.mesh);
 
     (function animate() {
         requestAnimationFrame(animate);
-        asteroid.rotation.y += 0.01;
-        asteroid.position.x = 800 * Math.cos(Date.now() * 0.001);
-        asteroid.position.z = 800 * Math.sin(Date.now() * 0.001);
+        asteroid.animate();
     })();
 </script>
 </body>

@@ -51,7 +51,14 @@
         #statsPanel .item { background: #0f1420; border: 1px solid #22304a; border-radius: 10px; padding: 10px; margin: 8px 0; }
         #statsPanel .row { display: flex; justify-content: space-between; gap: 8px; }
         #statsPanel .t { color: #9fb3c8; font-size: 12px; }
-        #statsPanel .v { font-weight: 700; }
+        #statsPanel .v { font-weight: 700; color: var(--text); font-size: 14px; }
+        /* Small color dots matching map circles */
+        .with-swatch { display: inline-flex; align-items: center; gap: 6px; }
+        .swatch { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.7); display: inline-block; }
+        .swatch.s-fatal { background: #b22222; border-color: #b22222; }
+        .swatch.s-burn3 { background: #ff0000; border-color: #ff0000; }
+        .swatch.s-burn2 { background: #ffa500; border-color: #ffa500; }
+        .swatch.s-burn1 { background: #ffff00; border-color: #cccc00; }
         #viewRoot.split #statsPanel { display: block; height: 100vh; grid-area: 1 / 2 / 2 / 3; }
         /* KPI info badge */
         #statsPanel .with-info { display: inline-flex; align-items: center; gap: 6px; }
@@ -385,6 +392,8 @@
             }
         }
     }
+    // No globe tooltips (colors are indicated via sidebar swatches)
+
     const globe = createGlobeInstance()
         .pointsData([])
         .showAtmosphere(true)
@@ -396,10 +405,11 @@
         .ringRepeatPeriod('repeatPeriod')
         .polygonsData(burnPolys)
         .polygonCapColor(f => (f.properties && f.properties.fill) || 'rgba(255,255,0,0.20)')
-        .polygonSideColor(f => (f.properties && f.properties.fill) || 'rgba(255,255,0,0.20)')
+        .polygonSideColor(() => 'rgba(0,0,0,0)')
         .polygonStrokeColor(f => (f.properties && f.properties.stroke) || '#ffff00')
         .polygonAltitude(f => (f.properties && typeof f.properties.alt === 'number') ? f.properties.alt : 0.01)
-        .polygonLabel(f => (f.properties && f.properties.label) || '')
+        // Disable built-in labels; no tooltips on globe
+        .polygonLabel(() => '')
         .polygonsTransitionDuration(0);
 
     // Always use high-resolution textures
@@ -1503,7 +1513,7 @@
         hThermPop.appendChild(el('span', { innerText: ' ' }));
         hThermPop.appendChild(hThermPopInfo);
         wrap.appendChild(hThermPop);
-        const tlistTop = el('div', { id: 'thermalPopList' });
+        const tlistTop = el('div', { id: 'thermalPopList', className: 'list' });
         tlistTop.appendChild(el('div', { className: 'meta', innerText: 'loading…' }));
         wrap.appendChild(tlistTop);
         const tipThermRanges = 'Ignition thresholds (km) from the impact model: clothes, plywood, grass, paper, trees.';
@@ -1513,7 +1523,7 @@
         hThermRanges.appendChild(el('span', { innerText: ' ' }));
         hThermRanges.appendChild(hThermRangesInfo);
         wrap.appendChild(hThermRanges);
-        const rlistTop = el('div', { id: 'thermalRangesList' });
+        const rlistTop = el('div', { id: 'thermalRangesList', className: 'list' });
         rlistTop.appendChild(el('div', { className: 'meta', innerText: 'loading…' }));
         wrap.appendChild(rlistTop);
         // Meteor details
@@ -1716,9 +1726,12 @@
             const modeRaw = (e.mode || '').toString();
             const modeNice = modeRaw === 'surface_impact' ? 'Surface impact' : (modeRaw === 'airburst' ? 'Airburst' : (modeRaw ? modeRaw : '—'));
             const rows = [
-                ['Mode', modeNice],
-                ['Breakup altitude', e.breakup_altitude_m != null ? fmtM(e.breakup_altitude_m) : '—'],
+                ['Mode', modeNice]
             ];
+            // Show breakup altitude only for airburst scenarios
+            if (modeRaw === 'airburst' && e.breakup_altitude_m != null) {
+                rows.push(['Breakup altitude', fmtM(e.breakup_altitude_m)]);
+            }
             // Only show airburst altitude if actually an airburst
             if (modeRaw === 'airburst' && e.airburst_altitude_m != null) {
                 rows.push(['Airburst altitude', fmtM(e.airburst_altitude_m)]);
@@ -1759,15 +1772,45 @@
         const box = document.getElementById('airBlastList'); if (!box) return; box.innerHTML='';
         try {
             const a = summary.air_blast || {};
-            const rows = [
-                ['Fatal radius', a.fatal_radius_km != null ? fmtKm(a.fatal_radius_km) : '—'],
-                ['SPL at 1 km', fmtDb(a.spl_at_1km_db)],
-            ];
-            for (const [k,v] of rows) {
-                const row = el('div', { className:'item' });
-                row.appendChild(el('div', { className:'row' }, [el('div',{className:'t',innerText:k}), el('div',{className:'v',innerText:v})]));
-                box.appendChild(row);
-            }
+            const fireball_d_km = Number(((summary.thermal || {}).fireball_diameter_km));
+            const fireball_r_km = Number.isFinite(fireball_d_km) ? fireball_d_km / 2 : 0;
+            const fatal_blast_km = Number(a.fatal_radius_km);
+            const fatality_km = Math.max(Number.isFinite(fireball_r_km) ? fireball_r_km : 0, Number.isFinite(fatal_blast_km) ? fatal_blast_km : 0);
+
+            // Combined fatality radius (max of fireball and blast fatal)
+            const rowFatalR = el('div', { className:'item' });
+            const fatalRowInner = el('div', { className:'row' }, [
+                el('div',{className:'t',innerText:'Fatality radius'}),
+                el('div',{className:'v', id:'fatalityRadiusVal', innerText: fatality_km>0 ? fmtKm(fatality_km) : '—'})
+            ]);
+            rowFatalR.appendChild(fatalRowInner);
+            // Hover highlight for fatality radius
+            try {
+                const km = Number(fatality_km);
+                if (Number.isFinite(km) && km > 0) {
+                    rowFatalR.addEventListener('mouseenter', () => {
+                        try { if (currentImpact) showHoverCircle(currentImpact.lon, currentImpact.lat, km, STEPS_HOVER); } catch(_) {}
+                    });
+                    rowFatalR.addEventListener('mouseleave', () => { try { clearHoverCircle(); } catch(_) {} });
+                }
+            } catch(_) {}
+            box.appendChild(rowFatalR);
+
+            // Estimated fatalities (cumulative within fatality radius)
+            const rowFatalN = el('div', { className:'item' });
+            rowFatalN.appendChild(el('div', { className:'row' }, [
+                el('div',{className:'t',innerText:'Estimated fatalities'}),
+                el('div',{className:'v', id:'fatalitiesVal', innerText:'…'})
+            ]));
+            box.appendChild(rowFatalN);
+
+            // SPL row (unchanged)
+            const rowSPL = el('div', { className:'item' });
+            rowSPL.appendChild(el('div', { className:'row' }, [
+                el('div',{className:'t',innerText:'SPL at 1 km'}),
+                el('div',{className:'v',innerText: fmtDb(a.spl_at_1km_db)})
+            ]));
+            box.appendChild(rowSPL);
             // Scaled radii (each as its own row)
             const h = a.health_rings_km || {};
             const t4 = a.table4_rings_km || {};
@@ -1803,6 +1846,20 @@
             Object.entries(h).forEach(([k, v]) => pushRow(labelize(k), v));
             Object.entries(t4).forEach(([k, v]) => pushRow(labelize(k), v));
             Object.entries(wind).forEach(([k, v]) => pushRow(labelize(k), v));
+
+            // Async: compute population inside fatality radius using backend
+            try {
+                const lat = (currentImpact && Number(currentImpact.lat)) || (prefetchState && prefetchState.lat);
+                const lon = (currentImpact && Number(currentImpact.lon)) || (prefetchState && prefetchState.lon);
+                const km = Number(fatality_km);
+                if (Number.isFinite(lat) && Number.isFinite(lon) && Number.isFinite(km) && km > 0) {
+                    getPopulationCached(lat, lon, km)
+                        .then(n => setText('fatalitiesVal', nf(n)))
+                        .catch(() => setText('fatalitiesVal', 'error'));
+                } else {
+                    setText('fatalitiesVal', '—');
+                }
+            } catch(_) { setText('fatalitiesVal', '—'); }
         } catch(e) {}
     }
 
@@ -1875,10 +1932,10 @@
                 rings.push({ lat, lng: lon, maxR: deg, propagationSpeed: speed, repeatPeriod: 1e9, color, createdAt: now, lifetime: life });
                 ringsDirty = true;
             };
-            // crater
+            // crater (visual size only via polygons; do not add animated ring to avoid mismatch)
             const C = s.crater || {};
-            if (C.final_diameter_m && C.final_diameter_m>0) addRing((C.final_diameter_m/1000)/2, 'rgba(255,255,255,0.9)', 25000);
-            // STATIC thermal circles: DEAD (third-degree), second-degree, first-degree
+            // (removed animated crater ring)
+            // STATIC thermal circles and hazard rings: third-degree, second-degree, first-degree; plus fatality and fireball
             const r = (s.thermal && s.thermal.ring_distances_km) || {};
             const feats = [];
             let craterRadiusKm = 0;
@@ -1892,21 +1949,40 @@
                     const depth_txt = (depth_m && depth_m > 0) ? `, depth \u2248 ${Number(depth_m).toFixed(0)} m` : '';
                     // Fill disk for crater area
                     const propsFill = envIsOcean
-                      ? { fill: 'rgba(255,0,255,0.35)', stroke: '#ff00ff', alt: 0.050, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` }
-                      : { fill: 'rgba(255,255,255,0.12)', stroke: '#ffffff', alt: 0.018, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` };
+                      ? { fill: 'rgba(255,0,255,0.35)', stroke: '#ff00ff', alt: 0.013, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` }
+                      : { fill: 'rgba(255,255,255,0.12)', stroke: '#ffffff', alt: 0.012, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` };
                     const craterFill = circleFeature(lon, lat, craterRadiusKm, STEPS_POLY, propsFill);
                     if (craterFill) feats.push(craterFill);
                     // Visible rim annulus (thickness ~2% of radius, min 0.6 km)
                     const rimThick = Math.max(0.6, craterRadiusKm * 0.02);
                     const rimLabel = `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}`;
                     const propsRim = envIsOcean
-                      ? { fill: 'rgba(255,0,255,0.95)', stroke: '#ff00ff', alt: 0.060, label: rimLabel }
-                      : { fill: 'rgba(255,255,255,0.95)', stroke: '#ffffff', alt: 0.022, label: rimLabel };
+                      ? { fill: 'rgba(255,0,255,0.95)', stroke: '#ff00ff', alt: 0.014, label: rimLabel }
+                      : { fill: 'rgba(255,255,255,0.95)', stroke: '#ffffff', alt: 0.013, label: rimLabel };
                     const craterRimBand = annulusFeature(lon, lat, craterRadiusKm, rimThick, STEPS_POLY, propsRim);
                     if (craterRimBand) feats.push(craterRimBand);
                 }
             } catch(e) {}
-            // Ocean impacts: skip land thermal overlays; keep crater polygon and add a bright rim and static ring for visibility
+            // Add combined fatality circle: max(fireball radius, air-blast fatal radius)
+            try {
+                const abl = (s.air_blast || {});
+                const fatal_blast_km = Number(abl.fatal_radius_km);
+                const fireball_d_km = Number(((s.thermal || {}).fireball_diameter_km));
+                const fireball_r_km = Number.isFinite(fireball_d_km) ? fireball_d_km / 2 : 0;
+                const fatal_km = Math.max(
+                    Number.isFinite(fatal_blast_km) ? fatal_blast_km : 0,
+                    Number.isFinite(fireball_r_km) ? fireball_r_km : 0
+                );
+                if (fatal_km > 0) {
+                    const fatal = circleFeature(
+                        lon, lat, fatal_km, STEPS_POLY,
+                        { fill: 'rgba(178,34,34,0.25)', stroke: '#b22222', alt: 0.016, label: 'Fatality radius' }
+                    );
+                    if (fatal) feats.push(fatal);
+                }
+            } catch(_) {}
+
+            // Ocean impacts: skip land thermal overlays; keep crater/fatal/fireball polygons and add a bright rim ring for visibility
             if (envIsOcean) {
                 burnPolys = feats;
                 burnPolysDirty = true;
@@ -1915,19 +1991,21 @@
             }
             const red = circleFeature(
                 lon, lat, Number(r.third_degree_burn), STEPS_POLY,
-                { fill: 'rgba(255,0,0,0.22)', stroke: '#ff0000', alt: 0.010, label: 'DEAD (third-degree burns)' }
+                { fill: 'rgba(255,0,0,0.22)', stroke: '#ff0000', alt: 0.015, label: 'Third-degree burns' }
             );
             const orange = circleFeature(
                 lon, lat, Number(r.second_degree_burn), STEPS_POLY,
-                { fill: 'rgba(255,165,0,0.20)', stroke: '#ffa500', alt: 0.010, label: 'Second-degree burns' }
+                { fill: 'rgba(255,165,0,0.20)', stroke: '#ffa500', alt: 0.014, label: 'Second-degree burns' }
             );
             const yellow = circleFeature(
                 lon, lat, Number(r.first_degree_burn), STEPS_POLY,
-                { fill: 'rgba(255,255,0,0.18)', stroke: '#ffff00', alt: 0.010, label: 'First-degree burns' }
+                { fill: 'rgba(255,255,0,0.18)', stroke: '#ffff00', alt: 0.013, label: 'First-degree burns' }
             );
             if (red) feats.push(red);
             if (orange) feats.push(orange);
             if (yellow) feats.push(yellow);
+            // no hazard circle metadata; colors indicated via sidebar swatches
+            // Labels carried by polygon props; no manual metadata needed
             burnPolys = feats;
             burnPolysDirty = true;
             // Add a subtle rim on land as well
@@ -1941,6 +2019,49 @@
         const list = document.getElementById('thermalPopList');
         if (!list) return;
         list.innerHTML = '';
+        // Add fatality counter at the top (max of fireball radius and air-blast fatal radius)
+        try {
+            const fireball_d_km = Number(((summary.thermal || {}).fireball_diameter_km));
+            const fireball_r_km = Number.isFinite(fireball_d_km) ? fireball_d_km / 2 : 0;
+            const fatal_blast_km = Number(((summary.air_blast || {}).fatal_radius_km));
+            const fatality_km = Math.max(
+                Number.isFinite(fireball_r_km) ? fireball_r_km : 0,
+                Number.isFinite(fatal_blast_km) ? fatal_blast_km : 0
+            );
+            const row = el('div', { className: 'item', id: 'fatalTopRow' });
+            const labelWrap = el('div', { className: 'with-swatch', id: 'fatalitiesTopLbl' });
+            labelWrap.appendChild(el('span', { className: 'swatch s-fatal', attrs: { title: 'Matches circle color on the globe' } }));
+            labelWrap.appendChild(el('span', { id: 'fatalitiesTopLblTxt', innerText: 'Estimated fatalities' }));
+            const inner = el('div', { className: 'row' }, [
+                labelWrap,
+                el('div', { className: 'v', id: 'fatalitiesTopVal', innerText: '…' })
+            ]);
+            row.appendChild(inner);
+            // Hover circle for fatality radius
+            try {
+                const km = Number(fatality_km);
+                if (Number.isFinite(km) && km > 0) {
+                    row.addEventListener('mouseenter', () => {
+                        try { if (currentImpact) showHoverCircle(currentImpact.lon, currentImpact.lat, km, STEPS_HOVER); } catch(_) {}
+                    });
+                    row.addEventListener('mouseleave', () => { try { clearHoverCircle(); } catch(_) {} });
+                }
+            } catch(_) {}
+            list.appendChild(row);
+            // Async fill counter
+            try {
+                const lat = (currentImpact && Number(currentImpact.lat)) || (prefetchState && prefetchState.lat);
+                const lon = (currentImpact && Number(currentImpact.lon)) || (prefetchState && prefetchState.lon);
+                const km = Number(fatality_km);
+                if (Number.isFinite(lat) && Number.isFinite(lon) && Number.isFinite(km) && km > 0) {
+                    getPopulationCached(lat, lon, km)
+                        .then(n => setText('fatalitiesTopVal', nf(n)))
+                        .catch(() => setText('fatalitiesTopVal', 'error'));
+                } else {
+                    setText('fatalitiesTopVal', '—');
+                }
+            } catch(_) { setText('fatalitiesTopVal', '—'); }
+        } catch(_) {}
         if (envIsOcean) {
             list.appendChild(el('div', { className: 'meta', innerText: 'poor fish :(' }));
             return;
@@ -1952,7 +2073,7 @@
             const first = Number(r.first_degree_burn);
             // Use desired categories but keep strictly increasing radii only
             const desired = [
-                { key: 'dead', label: 'DEAD', km: third },
+                { key: 'burn3', label: 'Third-degree burns', km: third },
                 { key: 'burn2', label: 'Second-degree injuries', km: second },
                 { key: 'burn1', label: 'First-degree injuries', km: first },
             ]
@@ -1974,10 +2095,13 @@
             for (const d of ringsKm) {
                 const row = el('div', { className: 'item', id: `therm-${d.key}` });
                 let label = d.label;
-                // Add range context for non-innermost items later when we know prev
+                const lblWrap = el('div', { className: 'with-swatch', id: `therm-lbl-${d.key}` });
+                const swatchClass = d.key === 'burn3' ? 's-burn3' : (d.key === 'burn2' ? 's-burn2' : 's-burn1');
+                lblWrap.appendChild(el('span', { className: `swatch ${swatchClass}`, attrs: { title: 'Matches circle color on the globe' } }));
+                lblWrap.appendChild(el('span', { id: `therm-lbl-text-${d.key}`, innerText: `${label}` }));
                 row.appendChild(el('div', { className: 'row' }, [
-                    el('div', { id: `therm-lbl-${d.key}`, innerText: `${label}` }),
-                    el('div', { id: `therm-val-${d.key}`, innerText: 'loading…' })
+                    lblWrap,
+                    el('div', { id: `therm-val-${d.key}`, className: 'v', innerText: 'loading…' })
                 ]));
                 list.appendChild(row);
             }
@@ -1993,7 +2117,7 @@
                     const label = i === 0
                         ? `${d.label} (<= ${fmtKm(d.km)})`
                         : `${d.label} (${fmtKm(prevKm)} – ${fmtKm(d.km)})`;
-                    setText(`therm-lbl-${d.key}`, label);
+                    setText(`therm-lbl-text-${d.key}`, label);
                     setText(`therm-val-${d.key}`, nf(inc));
                     prevCum = cum;
                     prevKm = d.km;

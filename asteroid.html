@@ -84,6 +84,8 @@
     let burnPolysDirty = false;
     // Hover circle overlay (single line loop)
     let hoverCircle = null;
+    // Persistent crater rim overlay
+    let craterRim = null;
     let plannedRingKm = [];
     let asteroidTemplate = null;
     const clock = new THREE.Clock();
@@ -91,6 +93,8 @@
     let asteroids = [];
     let followTarget = null;
     let currentImpact = null;
+    // Prefetch state to warm API data before impact UI needs it
+    let prefetchState = { lat: null, lon: null, isOceanP: null, summaryP: null, popPromises: new Map() };
     // Known impact info (from index page)
     let impactLatLng = null;      // { lat, lng }
     let impactTargetVec = null;   // THREE.Vector3 on the sphere (radius ETALON)
@@ -100,6 +104,17 @@
     let impactDone = false;
     // Post-impact zoom state
     let zoomTransition = { active: false, start: 0, dur: 1200, fromPos: null, toPos: null, fromFov: 85, toFov: 38, aim: null };
+
+    // Fallback city sample used only if API is unavailable
+    const largeCities = [
+        { name: 'Berlin', lat: 52.5200, lng: 13.4050, pop: 3700000 },
+        { name: 'Budapest', lat: 47.4979, lng: 19.0402, pop: 1750000 },
+        { name: 'London', lat: 51.5074, lng: -0.1278, pop: 11000000 },
+        { name: 'Paris', lat: 48.8566, lng: 2.3522, pop: 11000000 },
+        { name: 'New York', lat: 40.7128, lng: -74.0060, pop: 18800000 }
+    ];
+    let labelsAttached = false;
+    let envIsOcean = false;
 
     const globe = Globe()
         .globeImageUrl('./resources/8081_earthmap10k.jpg')
@@ -202,6 +217,33 @@
             if (hoverCircle.material) { try { hoverCircle.material.dispose(); } catch(e) {} }
         } catch(e) {}
         hoverCircle = null;
+    }
+
+    function setCraterRimCircle(lon, lat, radiusKm, color = 0xffffff, steps = 256) {
+        clearCraterRimCircle();
+        if (!Number.isFinite(radiusKm) || radiusKm <= 0) return;
+        const pts = [];
+        for (let i = 0; i < steps; i++) {
+            const b = 2 * Math.PI * (i / steps);
+            const [x, y] = destinationPoint(lon, lat, b, radiusKm);
+            const v = latLngToVec3(y, x, ETALON + 1.5);
+            pts.push(v);
+        }
+        const geom = new THREE.BufferGeometry().setFromPoints(pts);
+        const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1.0, depthTest: false });
+        const loop = new THREE.LineLoop(geom, mat);
+        loop.renderOrder = 9998;
+        scene.add(loop);
+        craterRim = loop;
+    }
+    function clearCraterRimCircle() {
+        if (!craterRim) return;
+        try {
+            scene.remove(craterRim);
+            if (craterRim.geometry) { try { craterRim.geometry.dispose(); } catch(e) {} }
+            if (craterRim.material) { try { craterRim.material.dispose(); } catch(e) {} }
+        } catch(e) {}
+        craterRim = null;
     }
 
     function updateRings() {
@@ -351,6 +393,48 @@
         const sunLight = new THREE.DirectionalLight(0xffffff, 2);
         sunLight.position.set(1000,1000,1000);
         scene.add(sunLight);
+
+        // Sky: procedural starfield only (no external textures)
+        let starfield = null;
+        function buildStarfield(count = 4000, radius = 5000) {
+            try {
+                const geom = new THREE.BufferGeometry();
+                const positions = new Float32Array(count * 3);
+                const colors = new Float32Array(count * 3);
+                const color = new THREE.Color();
+                for (let i = 0; i < count; i++) {
+                    // Random point on a sphere
+                    const u = Math.random();
+                    const v = Math.random();
+                    const theta = 2 * Math.PI * u;
+                    const phi = Math.acos(2 * v - 1);
+                    const r = radius;
+                    const x = r * Math.sin(phi) * Math.cos(theta);
+                    const y = r * Math.cos(phi);
+                    const z = r * Math.sin(phi) * Math.sin(theta);
+                    positions[3*i+0] = x;
+                    positions[3*i+1] = y;
+                    positions[3*i+2] = z;
+                    // Slight color variance around white/blue
+                    color.setHSL(0.60 + Math.random()*0.05, 0.2, 0.8 + Math.random()*0.2);
+                    colors[3*i+0] = color.r;
+                    colors[3*i+1] = color.g;
+                    colors[3*i+2] = color.b;
+                }
+                geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                const mat = new THREE.PointsMaterial({ size: 2.0, sizeAttenuation: false, vertexColors: true, depthWrite: false, transparent: true, opacity: 0.9 });
+                const points = new THREE.Points(geom, mat);
+                points.frustumCulled = false;
+                scene.add(points);
+                return points;
+            } catch(e) { return null; }
+        }
+        function setupSky() {
+            try { scene.background = new THREE.Color(0x000008); } catch(_) {}
+            starfield = buildStarfield();
+        }
+        setupSky();
         const hemisphere = new THREE.HemisphereLight(0xffffff, 0x444444, 1.5);
         scene.add(hemisphere);
 
@@ -404,6 +488,12 @@
                     controls.target.copy(asteroid.mesh.position);
                     controls.update?.();
                 }
+            } catch(e) {}
+
+            // Start prefetching backend data for the intended impact location
+            try {
+                const ll = cartesianToLatLng(targetVec, ETALON);
+                startPrefetch(ll.lat, ll.lng);
             } catch(e) {}
         }
 
@@ -550,6 +640,21 @@
                 try { sound.impactAudio.load(); } catch(_) {}
             }
         } catch(e) {}
+        // Dispose background skybox texture / starfield
+        try {
+            const bg = scene && scene.background;
+            if (bg && bg.isTexture && bg.dispose) { bg.dispose(); }
+            if (scene) scene.background = null;
+        } catch(e) {}
+        try {
+            if (starfield) {
+                const g = starfield.geometry, m = starfield.material;
+                try { if (g) g.dispose(); } catch(_) {}
+                try { if (m) m.dispose(); } catch(_) {}
+                try { scene.remove(starfield); } catch(_) {}
+            }
+        } catch(e) {}
+
         // Renderer + GL context loss
         try {
             if (renderer) {
@@ -699,6 +804,57 @@
         panel.appendChild(buildHeader(lat, lon));
         panel.appendChild(buildKpiGrid());
         panel.appendChild(buildImpactSections());
+        try { renderMeteorDetails(); } catch(e) {}
+        // Attach city labels lazily once the sidebar appears
+        try {
+            if (!labelsAttached) {
+                // Load only country capitals (GeoNames feature code PPLC) from cities15000.txt
+                fetch('./resources/cities15000.txt')
+                  .then(res => res.ok ? res.text() : '')
+                  .catch(() => '')
+                  .then((txt) => {
+                      try {
+                          let cities = [];
+                          if (typeof txt === 'string' && txt.length) {
+                              const lines = txt.split(/\r?\n/);
+                              for (let i = 0; i < lines.length; i++) {
+                                  const line = lines[i];
+                                  if (!line || line[0] === '#') continue;
+                                  const cols = line.split('\t');
+                                  if (cols.length < 19) continue;
+                                  const name = cols[1] || cols[2] || '';
+                                  const lat = Number(cols[4]);
+                                  const lng = Number(cols[5]);
+                                  const fclass = cols[6] || '';
+                                  const fcode = cols[7] || '';
+                                  const pop = Number(cols[14] || 0);
+                                  // Keep only country capitals (PPLC)
+                                  if (fclass !== 'P' || fcode !== 'PPLC') continue;
+                                  if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+                                  cities.push({ name, lat, lng, pop });
+                              }
+                          }
+                          if (!cities.length) {
+                              return;
+                          }
+                          globe
+                            .labelsData(cities)
+                            .labelLat('lat')
+                            .labelLng('lng')
+                            .labelText(d => transliterate(d.name))
+                            // Compact sizes for capitals-only set
+                            .labelSize(d => 0.45 + Math.min(0.15, (d.pop||0) / 3e8))
+                            .labelColor(() => 'rgba(235,245,255,0.9)')
+                            .labelResolution(2)
+                            .labelAltitude(0.01)
+                            .labelIncludeDot(true)
+                            .labelDotRadius(0.1)
+                            .labelDotColor(() => 'rgba(255,255,255,0.9)');
+                          labelsAttached = true;
+                      } catch(e) { /* ignore */ }
+                  });
+            }
+        } catch(e) {}
         // Add action to simulate another impact
         try {
             const act = document.createElement('div');
@@ -737,27 +893,40 @@
                 aim
             };
         } catch(e) {}
-        // Kick off API calls
-        fetchIsOcean(lat, lon)
-          .then(async (isOcean) => {
-            setText('kEnv', isOcean ? 'Ocean' : 'Land');
-            // Impact summary from backend
+        // Use prefetched API calls if available to minimize wait
+        (async () => {
             try {
-                const summary = await fetchImpactSummary(isOcean);
-                renderImpactSummary(summary);
-                drawImpactRings(lat, lon, summary);
-                // Populate thermal impact population from API-derived ring distances
-                await populateThermalImpactPopulation(lat, lon, summary);
-                // Populate ignite thresholds from API
-                populateThermalRanges(summary);
+                let isOcean = false;
+                if (prefetchState && prefetchState.isOceanP) {
+                    try { isOcean = await prefetchState.isOceanP; } catch(_) { isOcean = await fetchIsOcean(lat, lon); }
+                } else {
+                    isOcean = await fetchIsOcean(lat, lon);
+                }
+                setText('kEnv', isOcean ? 'Ocean' : 'Land');
+                envIsOcean = !!isOcean;
+
+                let summary = null;
+                if (prefetchState && prefetchState.summaryP) {
+                    try { summary = await prefetchState.summaryP; } catch(_) { summary = await fetchImpactSummary(isOcean); }
+                } else {
+                    summary = await fetchImpactSummary(isOcean);
+                }
+                if (summary) {
+                    renderImpactSummary(summary);
+                    renderEntryBlock(summary);
+                    renderTargetBlock(summary);
+                    populateAirBlast(summary);
+                    populateSeismic(summary);
+                    populateEjecta(summary);
+                    drawImpactRings(lat, lon, summary);
+                    await populateThermalImpactPopulation(lat, lon, summary);
+                    populateThermalRanges(summary);
+                }
             } catch(e) {
                 addNote('impactErr', 'Impact API error: ' + String(e));
+                setText('kEnv','—');
             }
-          })
-          .catch(()=> setText('kEnv','—'))
-          .finally(() => {
-            // KPI values and thermal population handled from API summary above
-          });
+        })();
     }
     function queueResize() {
         setTimeout(() => {
@@ -779,6 +948,38 @@
     function txt(s) { return document.createTextNode(String(s)); }
     function setText(id, v) { const n = document.getElementById(id); if (n) n.textContent = v; }
     function addNote(id, message) { const n = document.getElementById(id); if (n) n.textContent = message; }
+    function popKey(km) { try { return String(Number(km).toFixed(6)); } catch(e) { return String(km); } }
+    function startPrefetch(lat, lon) {
+        try {
+            prefetchState.lat = Number(lat);
+            prefetchState.lon = Number(lon);
+            prefetchState.popPromises = new Map();
+            prefetchState.isOceanP = fetchIsOcean(prefetchState.lat, prefetchState.lon).catch(()=>false);
+            prefetchState.summaryP = prefetchState.isOceanP
+                .then(isOcean => fetchImpactSummary(isOcean))
+                .then(summary => {
+                    try {
+                        // Pre-warm thermal ring populations
+                        const r = (summary && summary.thermal && summary.thermal.ring_distances_km) || {};
+                        const third = Number(r.third_degree_burn);
+                        const second = Number(r.second_degree_burn);
+                        const first = Number(r.first_degree_burn);
+                        const desired = [third, second, first]
+                            .filter(x => Number.isFinite(x) && x > 0)
+                            .sort((a,b) => a - b);
+                        for (const km of desired) {
+                            const k = popKey(km);
+                            if (!prefetchState.popPromises.has(k)) {
+                                // Store the live promise; do not coerce failures to 0 here.
+                                prefetchState.popPromises.set(k, fetchPopulation(prefetchState.lat, prefetchState.lon, km));
+                            }
+                        }
+                    } catch(e) {}
+                    return summary;
+                })
+                .catch(e => { /* swallow; UI handles errors */ return null; });
+        } catch(e) { /* ignore */ }
+    }
     function buildHeader(lat, lon) {
         const h = el('div');
         h.appendChild(el('h2', { innerText: 'Impact Report' }));
@@ -790,6 +991,8 @@
         wrap.appendChild(card('Environment', el('span', { id:'kEnv', innerText: '…' })));
         wrap.appendChild(card('Kinetic energy (TNT eq.)', el('span', { id:'kEnergy', innerText: '…' })));
         wrap.appendChild(card('Crater diameter (km)', el('span', { id:'kCrater', innerText: '…' })));
+        wrap.appendChild(card('Crater depth (m)', el('span', { id:'kCraterDepth', innerText: '…' })));
+        wrap.appendChild(card('Tsunami', el('span', { id:'kTsunami', innerText: '—' })));
         return wrap;
     }
     function card(title, valueNode) {
@@ -803,16 +1006,75 @@
         const wrap = el('div');
         // Keep only thermal population list and API ranges; omit verbose impact summary text blocks
         wrap.appendChild(el('div', { id: 'impactErr', className: 'meta', innerText: '' }));
-        // Thermal population section
+        // Thermal sections first
         wrap.appendChild(el('h2', { innerText: 'Thermal impact population' }));
-        const tlist = el('div', { id: 'thermalPopList' });
-        wrap.appendChild(tlist);
-        // Thermal ranges section (ignite thresholds from API)
+        const tlistTop = el('div', { id: 'thermalPopList' });
+        tlistTop.appendChild(el('div', { className: 'meta', innerText: 'loading…' }));
+        wrap.appendChild(tlistTop);
         wrap.appendChild(el('h2', { innerText: 'Thermal ranges (API)' }));
-        const rlist = el('div', { id: 'thermalRangesList' });
-        wrap.appendChild(rlist);
+        const rlistTop = el('div', { id: 'thermalRangesList' });
+        rlistTop.appendChild(el('div', { className: 'meta', innerText: 'loading…' }));
+        wrap.appendChild(rlistTop);
+        // Meteor details
+        wrap.appendChild(el('h2', { innerText: 'Meteor' }));
+        const mlist = el('div', { id: 'meteorDetails', className: 'list' });
+        wrap.appendChild(mlist);
+        // Entry
+        wrap.appendChild(el('h2', { innerText: 'Entry' }));
+        const entryList = el('div', { id: 'entryList', className: 'list' });
+        wrap.appendChild(entryList);
+        // Target
+        wrap.appendChild(el('h2', { innerText: 'Target' }));
+        const targetList = el('div', { id: 'targetList', className: 'list' });
+        wrap.appendChild(targetList);
+        // Air blast
+        wrap.appendChild(el('h2', { innerText: 'Air blast' }));
+        const airList = el('div', { id: 'airBlastList', className: 'list' });
+        wrap.appendChild(airList);
+        // Seismic activity
+        wrap.appendChild(el('h2', { innerText: 'Seismic activity' }));
+        const seisList = el('div', { id: 'seismicList', className: 'list' });
+        wrap.appendChild(seisList);
+        // Ejecta deposit
+        wrap.appendChild(el('h2', { innerText: 'Ejecta deposit' }));
+        const ejList = el('div', { id: 'ejectaList', className: 'list' });
+        wrap.appendChild(ejList);
         return wrap;
     }
+
+    function renderMeteorDetails() {
+        try {
+            const box = document.getElementById('meteorDetails');
+            if (!box) return;
+            box.innerHTML = '';
+            const p = projectileFromContext();
+            const d_m = Number(p.diameter_m) || 0;
+            const d_km = d_m / 1000.0;
+            const v_kps = (Number(p.speed_mps) || 0) / 1000.0;
+            const rho = Number(p.density_kgpm3) || 0;
+            const ang = Number(p.angle_deg) || 0;
+            // mass
+            let mass = 0;
+            try { const r = d_m/2; const vol = (4/3)*Math.PI*r*r*r; mass = vol * rho; } catch(_) {}
+            const rows = [
+                ['Diameter', d_m > 0 ? `${d_m.toFixed(0)} m (${d_km.toFixed(3)} km)` : '—'],
+                ['Speed', v_kps > 0 ? `${v_kps.toFixed(2)} km/s` : '—'],
+                ['Density', rho > 0 ? `${nf(rho)} kg/m³` : '—'],
+                ['Entry angle', ang > 0 ? `${ang.toFixed(0)}°` : '—'],
+                ['Mass', mass > 0 ? `${nf(mass)} kg` : '—'],
+            ];
+            for (const [k, v] of rows) {
+                const row = el('div', { className: 'item' });
+                row.appendChild(el('div', { className: 'row' }, [
+                    el('div', { className: 't', innerText: k }),
+                    el('div', { className: 'v', innerText: v })
+                ]));
+                box.appendChild(row);
+            }
+        } catch(e) {}
+    }
+
+    // crater UI removed per requirements
 
     function projectileFromContext() {
         try {
@@ -886,6 +1148,159 @@
             const C = s.crater || {};
             const Dfr_km = (C.final_diameter_m || 0)/1000.0;
             setText('kCrater', Dfr_km > 0 ? Dfr_km.toFixed(2) : '—');
+            const d_m = Number(C.final_depth_m);
+            setText('kCraterDepth', (d_m && d_m > 0) ? Number(d_m).toFixed(0) : '—');
+        } catch(e) {}
+        try {
+            if (!envIsOcean) {
+                setText('kTsunami', '—');
+            } else {
+                const T = s.tsunami || {};
+                // Prefer collapse wave amplitude at the coast per requirements
+                let h = (T.collapse_wave_amp_at_coast_m != null && !isNaN(Number(T.collapse_wave_amp_at_coast_m)))
+                    ? Number(T.collapse_wave_amp_at_coast_m)
+                    : null;
+                // Fallbacks if collapse wave is not applicable for given conditions
+                if (h == null) {
+                    if (T.rim_wave_amp_at_coast_m != null && !isNaN(Number(T.rim_wave_amp_at_coast_m))) {
+                        h = Number(T.rim_wave_amp_at_coast_m);
+                    } else if (T.deep_amplitude_m != null && !isNaN(Number(T.deep_amplitude_m))) {
+                        h = Number(T.deep_amplitude_m);
+                    }
+                }
+                setText('kTsunami', h != null ? h.toFixed(2) : '—');
+            }
+        } catch(e) {}
+    }
+
+    function fmtM(x) { return (x==null || isNaN(Number(x))) ? '—' : `${Number(x).toFixed(0)} m`; }
+    function fmtDb(x) { return (x==null || isNaN(Number(x))) ? '—' : `${Number(x).toFixed(1)} dB`; }
+
+    function renderEntryBlock(s) {
+        const box = document.getElementById('entryList'); if (!box) return; box.innerHTML = '';
+        try {
+            const e = s.entry || {};
+            const modeRaw = (e.mode || '').toString();
+            const modeNice = modeRaw === 'surface_impact' ? 'Surface impact' : (modeRaw === 'airburst' ? 'Airburst' : (modeRaw ? modeRaw : '—'));
+            const rows = [
+                ['Mode', modeNice],
+                ['Breakup altitude', e.breakup_altitude_m != null ? fmtM(e.breakup_altitude_m) : '—'],
+            ];
+            // Only show airburst altitude if actually an airburst
+            if (modeRaw === 'airburst' && e.airburst_altitude_m != null) {
+                rows.push(['Airburst altitude', fmtM(e.airburst_altitude_m)]);
+            }
+            for (const [k,v] of rows) {
+                const row = el('div', { className:'item' });
+                row.appendChild(el('div', { className:'row' }, [el('div',{className:'t',innerText:k}), el('div',{className:'v',innerText:v})]));
+                box.appendChild(row);
+            }
+        } catch(e) {}
+    }
+
+    function renderTargetBlock(s) {
+        const box = document.getElementById('targetList'); if (!box) return; box.innerHTML = '';
+        try {
+            const t = s.target || {};
+            const rows = [
+                ['Kind', t.kind || '—'],
+                ['Density', t.density_kgpm3 != null ? `${nf(t.density_kgpm3)} kg/m³` : '—'],
+                ['Gravity', t.gravity_mps2 != null ? `${Number(t.gravity_mps2).toFixed(2)} m/s²` : '—'],
+            ];
+            for (const [k,v] of rows) {
+                const row = el('div', { className:'item' });
+                row.appendChild(el('div', { className:'row' }, [el('div',{className:'t',innerText:k}), el('div',{className:'v',innerText:v})]));
+                box.appendChild(row);
+            }
+        } catch(e) {}
+    }
+
+    function populateAirBlast(summary) {
+        const box = document.getElementById('airBlastList'); if (!box) return; box.innerHTML='';
+        try {
+            const a = summary.air_blast || {};
+            const rows = [
+                ['Fatal radius', a.fatal_radius_km != null ? fmtKm(a.fatal_radius_km) : '—'],
+                ['SPL at 1 km', fmtDb(a.spl_at_1km_db)],
+            ];
+            for (const [k,v] of rows) {
+                const row = el('div', { className:'item' });
+                row.appendChild(el('div', { className:'row' }, [el('div',{className:'t',innerText:k}), el('div',{className:'v',innerText:v})]));
+                box.appendChild(row);
+            }
+            // Scaled radii (each as its own row)
+            const h = a.health_rings_km || {};
+            const t4 = a.table4_rings_km || {};
+            const wind = a.wind_rings_km || {};
+            const labelize = (k) => {
+                if (!k) return '';
+                if (k === 'severe_lung_damage') return 'Severe lung damage';
+                if (k === 'eardrum_rupture') return 'Eardrum rupture';
+                if (k === 'buildings_collapse') return 'Buildings collapse';
+                if (k === 'homes_collapse') return 'Homes collapse';
+                if (k === 'glass_shatter') return 'Glass shatter';
+                return k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            };
+            const pushRow = (name, val) => {
+                if (val == null) return;
+                const row = el('div', { className: 'item' });
+                row.appendChild(el('div', { className: 'row' }, [
+                    el('div', { className: 't', innerText: name }),
+                    el('div', { className: 'v', innerText: fmtKm(val) })
+                ]));
+                box.appendChild(row);
+            };
+            Object.entries(h).forEach(([k, v]) => pushRow(labelize(k), v));
+            Object.entries(t4).forEach(([k, v]) => pushRow(labelize(k), v));
+            Object.entries(wind).forEach(([k, v]) => pushRow(labelize(k), v));
+        } catch(e) {}
+    }
+
+    function populateSeismic(summary) {
+        const box = document.getElementById('seismicList'); if (!box) return; box.innerHTML='';
+        try {
+            const s = summary.seismic || {};
+            const rows = [
+                ['Source magnitude (M)', s.source_magnitude_M != null ? Number(s.source_magnitude_M).toFixed(2) : '—'],
+                ['M6 radius', s.radius_km_M6 != null ? fmtKm(s.radius_km_M6) : '—'],
+                ['M5 radius', s.radius_km_M5 != null ? fmtKm(s.radius_km_M5) : '—'],
+                ['Felt radius', s.felt_radius_km != null ? fmtKm(s.felt_radius_km) : '—'],
+            ];
+            for (const [k,v] of rows) {
+                const row = el('div', { className:'item' });
+                row.appendChild(el('div', { className:'row' }, [el('div',{className:'t',innerText:k}), el('div',{className:'v',innerText:v})]));
+                box.appendChild(row);
+            }
+        } catch(e) {}
+    }
+
+    function populateEjecta(summary) {
+        const box = document.getElementById('ejectaList'); if (!box) return; box.innerHTML='';
+        try {
+            const e = summary.ejecta || {};
+            const rows = [
+                ['Rim height', e.rim_height_m != null ? fmtM(e.rim_height_m) : '—'],
+                ['Fireball limit', e.fireball_limit_km != null ? fmtKm(e.fireball_limit_km) : '—'],
+            ];
+            for (const [k,v] of rows) {
+                const row = el('div', { className:'item' });
+                row.appendChild(el('div', { className:'row' }, [el('div',{className:'t',innerText:k}), el('div',{className:'v',innerText:v})]));
+                box.appendChild(row);
+            }
+            const samples = Array.isArray(e.samples) ? e.samples.slice().sort((a,b)=> (a.r_km||0) - (b.r_km||0)).slice(0, 12) : [];
+            if (samples.length) {
+                // Title
+                const title = el('div', { className: 'item' });
+                title.appendChild(el('div', { className: 't', innerText: 'Samples (radius → thickness / arrival)' }));
+                box.appendChild(title);
+                // Rows: one neat line per sample
+                for (const s of samples) {
+                    const line = `${fmtKm(s.r_km)} → ${s.thickness_m!=null?fmtM(s.thickness_m):'—'} / ${s.arrival_s!=null? (Number(s.arrival_s).toFixed(0)+' s'):'—'}`;
+                    const row = el('div', { className: 'item' });
+                    row.appendChild(el('div', { innerText: line }));
+                    box.appendChild(row);
+                }
+            }
         } catch(e) {}
     }
 
@@ -904,6 +1319,29 @@
             // STATIC thermal circles: DEAD (third-degree), second-degree, first-degree
             const r = (s.thermal && s.thermal.ring_distances_km) || {};
             const feats = [];
+            let craterRadiusKm = 0;
+
+            // Always show a crater circle (final diameter)
+            try {
+                const crater_km = (C.final_diameter_m || 0) / 1000.0;
+                if (crater_km > 0) {
+                    craterRadiusKm = crater_km / 2;
+                    const depth_m = Number((C.final_depth_m != null) ? C.final_depth_m : 0);
+                    const depth_txt = (depth_m && depth_m > 0) ? `, depth \u2248 ${Number(depth_m).toFixed(0)} m` : '';
+                    const props = envIsOcean
+                      ? { fill: 'rgba(102,204,255,0.28)', stroke: '#66ccff', alt: 0.030, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` }
+                      : { fill: 'rgba(255,255,255,0.12)', stroke: '#ffffff', alt: 0.015, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` };
+                    const crater = circleFeature(lon, lat, craterRadiusKm, 192, props);
+                    if (crater) feats.push(crater);
+                }
+            } catch(e) {}
+            // Ocean impacts: skip land thermal overlays; keep crater polygon and add a bright rim overlay for visibility
+            if (envIsOcean) {
+                burnPolys = feats;
+                burnPolysDirty = true;
+                try { if (craterRadiusKm > 0) setCraterRimCircle(lon, lat, craterRadiusKm, 0x66ccff); } catch(_) {}
+                return;
+            }
             const red = circleFeature(
                 lon, lat, Number(r.third_degree_burn), 192,
                 { fill: 'rgba(255,0,0,0.22)', stroke: '#ff0000', alt: 0.010, label: 'DEAD (third-degree burns)' }
@@ -921,6 +1359,8 @@
             if (yellow) feats.push(yellow);
             burnPolys = feats;
             burnPolysDirty = true;
+            // Add a subtle white rim on land as well
+            try { if (craterRadiusKm > 0) setCraterRimCircle(lon, lat, craterRadiusKm, 0xffffff); } catch(_) {}
         } catch(e) {}
     }
 
@@ -930,6 +1370,10 @@
         const list = document.getElementById('thermalPopList');
         if (!list) return;
         list.innerHTML = '';
+        if (envIsOcean) {
+            list.appendChild(el('div', { className: 'meta', innerText: 'poor fish :(' }));
+            return;
+        }
         try {
             const r = (summary && summary.thermal && summary.thermal.ring_distances_km) || {};
             const third = Number(r.third_degree_burn);
@@ -973,7 +1417,7 @@
             for (let i = 0; i < ringsKm.length; i++) {
                 const d = ringsKm[i];
                 try {
-                    const cum = await fetchPopulation(lat, lon, d.km);
+                    const cum = await getPopulationCached(lat, lon, d.km);
                     const inc = Math.max(0, cum - prevCum);
                     const label = i === 0
                         ? `${d.label} (<= ${fmtKm(d.km)})`
@@ -996,6 +1440,10 @@
         const list = document.getElementById('thermalRangesList');
         if (!list) return;
         list.innerHTML = '';
+        if (envIsOcean) {
+            list.appendChild(el('div', { className: 'meta', innerText: 'poor fish :(' }));
+            return;
+        }
         try {
             const r = (summary && summary.thermal && summary.thermal.ring_distances_km) || {};
             const items = [
@@ -1065,8 +1513,47 @@
         });
         return Number(data.population) || 0;
     }
+    async function getPopulationCached(lat, lon, radius) {
+        try {
+            if (prefetchState && prefetchState.lat != null && prefetchState.lon != null) {
+                const same = Math.abs(Number(lat) - Number(prefetchState.lat)) < 1e-6 && Math.abs(Number(lon) - Number(prefetchState.lon)) < 1e-6;
+                if (same) {
+                    const k = popKey(radius);
+                    const p = prefetchState.popPromises && prefetchState.popPromises.get(k);
+                    if (p) {
+                        try { return await p; }
+                        catch(_) {
+                            // fallback: refetch once if prefetch failed
+                            const fresh = fetchPopulation(lat, lon, radius);
+                            try { prefetchState.popPromises.set(k, fresh); } catch(e) {}
+                            return await fresh;
+                        }
+                    }
+                }
+            }
+        } catch(e) {}
+        return await fetchPopulation(lat, lon, radius);
+    }
     // computeImpactModelKpis removed to ensure data is sourced from API
     // fetchRingsPopulation removed per requirements
 </script>
 </body>
 </html>
+    // Simple transliteration to avoid '?' for unsupported glyphs on canvas labels
+    function transliterate(s) {
+        try {
+            if (!s) return '';
+            let t = String(s);
+            // Decompose accents and strip combining marks
+            try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(_) {}
+            const map = {
+                'ß':'ss','Ø':'O','ø':'o','Ł':'L','ł':'l','Đ':'D','đ':'d','Œ':'OE','œ':'oe','Æ':'AE','æ':'ae',
+                'Þ':'Th','þ':'th','Å':'A','å':'a','Ğ':'G','ğ':'g','Ş':'S','ş':'s','Č':'C','č':'c','Ć':'C','ć':'c',
+                'Ž':'Z','ž':'z','Ñ':'N','ñ':'n','İ':'I','ı':'i'
+            };
+            t = t.replace(/[ßØøŁłĐđŒœÆæÞþÅåĞğŞşČčĆćŽžÑñİı]/g, c => map[c] || '');
+            // Remove any remaining non-ASCII that could render as '?'
+            t = t.replace(/[^\x20-\x7E]/g, '');
+            return t;
+        } catch(_) { return String(s || ''); }
+    }

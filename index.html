@@ -57,6 +57,12 @@
 			}
 			.panel h2 { margin: 0 0 10px; font-size: 18px; }
 			.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+			/* Custom asteroid form: responsive, prevents overlap */
+			.custom-grid { display: grid; gap: 12px; width: 100%; }
+			@media (min-width: 640px) { .custom-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+			@media (min-width: 960px) { .custom-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+			.fld { min-width: 0; }
+			.fld input { width: 100%; box-sizing: border-box; }
 			.spacer { height: 8px; }
 			.btn {
 				background: var(--accent);
@@ -84,12 +90,15 @@
 			.kpi {
 				display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
 			}
+			.kpi.vertical { grid-template-columns: 1fr; }
 			.kpi .box { background: #0f1420; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
 			.kpi .t { color: var(--muted); font-size: 12px; }
 			.kpi .v { font-size: 18px; margin-top: 2px; font-weight: 700; }
 			.list { display: grid; gap: 10px; max-height: 380px; overflow: auto; }
 			.item { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; background: #0f1420; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+			.item.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 			.item .meta { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+			.list.small .item { grid-template-columns: 1fr; }
 			.pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--pill); }
 			.danger { color: var(--danger); }
 			.ok { color: var(--ok); }
@@ -170,66 +179,71 @@
 						<div class="box"><div class="t">Potentially hazardous</div><div id="kpiPHA" class="v">–</div></div>
 					</div>
 					<div class="spacer"></div>
-					<div id="feedList" class="list"></div>
-					<div id="progress" class="footer-note"></div>
+                    <div id="feedList" class="list"></div>
+                    <div id="progress" class="footer-note"></div>
+                    <div id="selectedAstNote" class="footer-note"></div>
 				</section>
 
-				<section class="panel">
-					<h2>Custom asteroid</h2>
-					<div class="row">
-						<div style="flex:1; min-width: 140px;">
-							<label>Diameter (m)</label>
-							<input id="custDiameter" type="number" min="1" step="1" value="100" />
-						</div>
-						<div style="flex:1; min-width: 140px;">
-							<label>Velocity (km/s)</label>
-							<input id="custVelocity" type="number" min="0.1" step="0.1" value="17" />
-						</div>
-						<div style="flex:1; min-width: 160px;">
-							<label>Density (kg/m³)</label>
-							<input id="custDensity" type="number" min="500" step="100" value="3000" />
-						</div>
-					</div>
-					<div class="spacer"></div>
-					<div class="row">
-						<button id="calcEnergy" class="btn">Estimate energy</button>
-						<span class="note">Rough educational estimate (TNT equivalent and ballpark crater)</span>
-					</div>
-					<div class="spacer"></div>
-					<div class="kpi">
-						<div class="box"><div class="t">Mass (kg)</div><div id="kMass" class="v">–</div></div>
-						<div class="box"><div class="t">Kinetic energy (TNT eq.)</div><div id="kEnergy" class="v">–</div></div>
-						<div class="box"><div class="t">Crater diameter (km)</div><div id="kCrater" class="v">–</div></div>
-					</div>
-				</section>
+                <section class="panel">
+                    <h2>Custom asteroid</h2>
+                    <div class="row custom-grid">
+                        <div class="fld">
+                            <label>Diameter (m)</label>
+                            <input id="custDiameter" type="number" min="1" step="1" value="100" />
+                        </div>
+                        <div class="fld">
+                            <label>Velocity (km/s)</label>
+                            <input id="custVelocity" type="number" min="0.1" step="0.1" value="17" />
+                        </div>
+                        <div class="fld">
+                            <label>Density (kg/m³)</label>
+                            <input id="custDensity" type="number" min="500" step="100" value="3000" />
+                        </div>
+                    </div>
+                    <div class="spacer"></div>
+                    <div class="row">
+                        <button id="calcEnergy" class="btn">Estimate energy</button>
+                        <button id="useCustom" class="btn secondary">Use for simulation</button>
+                        <span class="note">Rough educational estimate (TNT equivalent and ballpark crater)</span>
+                    </div>
+                    <div class="spacer"></div>
+                    <div class="kpi vertical">
+                        <div class="box"><div class="t">Mass (kg)</div><div id="kMass" class="v">–</div></div>
+                        <div class="box"><div class="t">Kinetic energy (TNT eq.)</div><div id="kEnergy" class="v">–</div></div>
+                        <div class="box"><div class="t">Crater diameter (km)</div><div id="kCrater" class="v">–</div></div>
+                    </div>
+                </section>
 
-				<section class="panel">
-					<h2>Impact location</h2>
-					<div id="map"></div>
-					<div class="spacer"></div>
-					<div class="row">
-						<div>
-							<label>Lat</label><br/>
-							<input id="lat" type="number" step="0.0001" value="0" style="width:130px;"/>
-						</div>
-						<div>
-							<label>Lon</label><br/>
-							<input id="lon" type="number" step="0.0001" value="0" style="width:130px;"/>
-						</div>
-						<div>
-							<label>Rings (km)</label><br/>
-							<input id="rings" type="text" value="5,20,100" style="width:150px;"/>
-						</div>
-					</div>
-					<div class="spacer"></div>
-					<div class="row">
-						<button id="estimatePop" class="btn secondary">Estimate population (beta)</button>
-						<button id="launchBtn" class="btn launch" disabled>LAUNCH</button>
-					</div>
-					<div class="spacer"></div>
-					<div id="popResults" class="list"></div>
-					<div class="footer-note">Tip: if the backend is running, this will call <code>/getPopulation</code>. Otherwise it shows a local-only preview.</div>
-				</section>
+                <section class="panel">
+                    <h2>Impact location</h2>
+                    <div id="map"></div>
+                    <div class="spacer"></div>
+                    <div class="row">
+                        <div>
+                            <label>Lat</label><br/>
+                            <input id="lat" type="number" step="0.0001" value="0" style="width:130px;"/>
+                        </div>
+                        <div>
+                            <label>Lon</label><br/>
+                            <input id="lon" type="number" step="0.0001" value="0" style="width:130px;"/>
+                        </div>
+                        <div style="flex:1; min-width: 240px;">
+                            <label>Search location</label><br/>
+                            <div class="inline" style="gap:8px; width:100%;">
+                                <input id="locSearch" type="text" placeholder="City, place, address" style="flex:1; min-width: 180px;" />
+                                <button id="locSearchBtn" class="btn secondary" type="button">Search</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="spacer"></div>
+                    <div id="locResults" class="list small" style="display:none"></div>
+                    <div class="spacer"></div>
+                    <div class="row">
+                        <button id="launchBtn" class="btn launch" disabled>LAUNCH</button>
+                    </div>
+                    <div class="spacer"></div>
+                    <div id="popResults" class="list" style="display:none"></div>
+                </section>
 			</div>
 
 			<div class="spacer"></div>
@@ -304,7 +318,7 @@
 				return all;
 			}
 
-			function renderFeed(items) {
+function renderFeed(items) {
 				items.sort((a,b) => a.miss_km - b.miss_km);
 				$('kpiCount').textContent = nt(items.length);
 				$('kpiClosest').textContent = items.length ? km(items[0].miss_km) : '–';
@@ -327,8 +341,8 @@
 						<div class="right">
 							<button class="btn secondary">Select</button>
 						</div>`;
-					el.querySelector('button').addEventListener('click', () => selectAsteroid(it));
-					list.appendChild(el);
+        el.querySelector('button').addEventListener('click', () => selectAsteroid(it, el));
+        list.appendChild(el);
 				}
 			}
 
@@ -390,13 +404,22 @@
 			}
 
 			// --- Selection state ---
-			let selectedAsteroid = null;
-			function selectAsteroid(it) {
-				selectedAsteroid = it;
-				const name = `${it.name} · miss ${km2(it.miss_km)} km · v ${it.vel_kps.toFixed(2)} km/s`;
-				alert(`Selected: ${name}\nNext, choose an impact location on the map.`);
-				maybeEnableLaunch();
-			}
+let selectedAsteroid = null;
+let selectedItemEl = null;
+function selectAsteroid(it, el = null) {
+    selectedAsteroid = it;
+    if (selectedItemEl) selectedItemEl.classList.remove('selected');
+    if (el) { el.classList.add('selected'); selectedItemEl = el; } else { selectedItemEl = null; }
+    const parts = [];
+    if (it?.name) parts.push(it.name);
+    if (Number.isFinite(it?.miss_km)) parts.push(`miss ${km2(it.miss_km)} km`);
+    if (Number.isFinite(it?.vel_kps)) parts.push(`v ${Number(it.vel_kps).toFixed(2)} km/s`);
+    const msg = parts.length ? `Selected: ${parts.join(' · ')}. Next, choose an impact location on the map.` :
+        'Asteroid selected. Next, choose an impact location on the map.';
+    const n = $('selectedAstNote');
+    if (n) n.textContent = msg;
+    maybeEnableLaunch();
+}
 
 			// --- Custom physics estimates (very rough) ---
 			function formatTntEqFromMt(mt) {
@@ -426,6 +449,29 @@
 				$('kCrater').textContent = (D_km > 0 ? D_km.toFixed(2) : '–');
 			}
 
+			function useCustomAsteroid() {
+				const d_m = Number($('custDiameter').value || '0');
+				const v_kps = Number($('custVelocity').value || '0');
+				if (!(d_m > 0) || !(v_kps > 0)) {
+					alert('Enter a valid diameter (m) and velocity (km/s).');
+					return;
+				}
+				const d_km = d_m / 1000.0;
+				const it = {
+					name: 'Custom asteroid',
+					id: 'custom',
+					hazardous: false,
+					diameter_km_min: d_km,
+					diameter_km_max: d_km,
+					miss_km: null,
+					vel_kps: v_kps,
+					orbiting_body: '—',
+					approach_time: 'custom'
+				};
+    if (selectedItemEl) { selectedItemEl.classList.remove('selected'); selectedItemEl = null; }
+    selectAsteroid(it, null);
+			}
+
 			// --- Map & rings ---
 			let map, marker;
 			function initMap() {
@@ -447,7 +493,7 @@
 				});
 			}
 
-			async function estimatePopulation() {
+            async function estimatePopulation() {
 				const lat = Number($('lat').value);
 				const lon = Number($('lon').value);
 				const rings = $('rings').value.split(',').map(s => Number(s.trim())).filter(x => x>0).sort((a,b)=>a-b);
@@ -478,13 +524,55 @@
 						$(`pop-${r}`).innerHTML = `<span class="note">${String(e)}</span>`;
 					}
 				}
-			}
+            }
 
-			// --- Launch gating ---
+            // --- Launch gating ---
 			function hasLocation() {
 				const lat = Number($('lat').value);
 				const lon = Number($('lon').value);
 				return Number.isFinite(lat) && Number.isFinite(lon);
+            }
+
+			// --- Location search (Nominatim) ---
+			async function searchLocation() {
+				const q = $('locSearch').value.trim();
+				const out = $('locResults');
+				if (!q) { out.style.display = 'none'; out.innerHTML = ''; return; }
+				out.style.display = 'block';
+				out.innerHTML = '<div class="item"><div>Searching…</div></div>';
+				try {
+					const url = new URL('https://nominatim.openstreetmap.org/search');
+					url.searchParams.set('q', q);
+					url.searchParams.set('format', 'json');
+					url.searchParams.set('limit', '5');
+					url.searchParams.set('addressdetails', '0');
+					const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
+					if (!res.ok) throw new Error(String(res.status));
+					const items = await res.json();
+					if (!Array.isArray(items) || items.length === 0) {
+						out.innerHTML = '<div class="item"><div>No results.</div></div>';
+						return;
+					}
+					out.innerHTML = '';
+					for (const it of items) {
+						const name = it.display_name || `${it.lat}, ${it.lon}`;
+						const row = document.createElement('div');
+						row.className = 'item';
+						row.style.cursor = 'pointer';
+						row.innerHTML = `<div><strong>${name}</strong><div class="meta">lat ${Number(it.lat).toFixed(4)}, lon ${Number(it.lon).toFixed(4)}</div></div>`;
+						row.addEventListener('click', () => {
+							const lat = Number(it.lat), lon = Number(it.lon);
+							$('lat').value = lat.toFixed(4);
+							$('lon').value = lon.toFixed(4);
+							try { marker.setLatLng([lat, lon]); map.setView([lat, lon], 8); } catch(e) {}
+							out.style.display = 'none'; out.innerHTML = '';
+							maybeEnableLaunch();
+						});
+						out.appendChild(row);
+					}
+				} catch (e) {
+					out.innerHTML = `<div class="item"><div class="meta">Search error: ${String(e)}</div></div>`;
+				}
 			}
 			function maybeEnableLaunch() {
 				const ready = !!selectedAsteroid && hasLocation();
@@ -494,8 +582,7 @@
 				if (!$('launchBtn').disabled) {
 					const ctx = {
 						selectedAsteroid,
-						impact: { lat: Number($('lat').value), lon: Number($('lon').value) },
-						rings: $('rings').value
+						impact: { lat: Number($('lat').value), lon: Number($('lon').value) }
 					};
 					localStorage.setItem('terv_ctx', JSON.stringify(ctx));
 					window.location.href = 'asteroid.html';
@@ -503,14 +590,16 @@
 			}
 
 			// --- Wire up UI ---
-			window.addEventListener('DOMContentLoaded', () => {
+            window.addEventListener('DOMContentLoaded', () => {
 				loadKey();
 				$('saveKey').addEventListener('click', storeKey);
 				$('loadToday').addEventListener('click', loadToday);
 				$('loadHistorical').addEventListener('click', loadHistorical);
 				$('calcEnergy').addEventListener('click', estimateEnergy);
-				$('estimatePop').addEventListener('click', estimatePopulation);
-				$('launchBtn').addEventListener('click', performLaunch);
+				$('useCustom').addEventListener('click', useCustomAsteroid);
+                $('launchBtn').addEventListener('click', performLaunch);
+                $('locSearchBtn').addEventListener('click', searchLocation);
+                $('locSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); searchLocation(); } });
 				['lat','lon'].forEach(id => $(id).addEventListener('input', maybeEnableLaunch));
 				initMap();
 				// prefill historical range with last 7 days

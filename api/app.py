@@ -6,7 +6,8 @@ import httpx
 import os
 import math, json, time, re
 from dotenv import load_dotenv
-from typing import Any, Dict, Optional, Tuple, Literal
+from typing import Any, Dict, Optional, Tuple, Literal, List
+import concurrent.futures as cf
 
 # Support both 'uvicorn api.app:app' (from repo root) and 'uvicorn app:app' (from api folder)
 try:
@@ -43,20 +44,39 @@ def is_ocean(
 ):
     load_dotenv()
     geonames_username = os.getenv("GEONAMES_USERNAME")
-    if not geonames_username:
-        logging.warning("GeoNames username not configured; returning land by default.")
-        # Graceful fallback: treat as land when not configured
+
+    # 1) Primary: GeoNames oceanJSON
+    if geonames_username:
+        geonames_url = f"http://api.geonames.org/oceanJSON?lat={lat}&lng={lon}&username={geonames_username}"
+        try:
+            r = httpx.get(geonames_url, timeout=10.0)
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, dict) and data.get("ocean"):
+                return True
+        except httpx.HTTPError as e:
+            logging.warning("GeoNames request failed; falling back to Nominatim. error=%s", e)
+    else:
+        logging.warning("GeoNames username not configured; falling back to Nominatim.")
+
+    # 2) Fallback: OpenStreetMap Nominatim reverse (best-effort, no key, polite UA)
+    try:
+        nom_url = "https://nominatim.openstreetmap.org/reverse"
+        headers = {"User-Agent": "terv-neo-impact/1.0 (contact: local app)"}
+        params = {"format": "json", "lat": lat, "lon": lon, "zoom": 5, "addressdetails": 1}
+        r2 = httpx.get(nom_url, headers=headers, params=params, timeout=10.0)
+        r2.raise_for_status()
+        data2 = r2.json()
+        addr = data2.get("address", {}) if isinstance(data2, dict) else {}
+        # If OSM reports 'ocean' or 'sea' in address, treat as ocean
+        if any(k in addr for k in ("ocean", "sea")):
+            return True
+        # Some waterbodies might be large lakes; still not ocean
+        return False
+    except Exception as e:
+        logging.warning("Nominatim fallback failed; defaulting to land. error=%s", e)
         return False
 
-    geonames_url = f"http://api.geonames.org/oceanJSON?lat={lat}&lng={lon}&username={geonames_username}"
-    try:
-        r = httpx.get(geonames_url, timeout=10.0)
-        r.raise_for_status()
-        data = r.json()
-        return bool(data.get("ocean"))
-    except httpx.HTTPError as e:
-        logging.warning("GeoNames request failed; returning land. error=%s", e)
-        return False
 
 # -------------------------------
 # Impact simulation endpoints
@@ -119,6 +139,22 @@ def mask_key(s: Optional[str]) -> Optional[str]:
     if not s:
         return s
     return s[:3] + "***" + s[-3:] if len(s) > 6 else "***"
+
+def _parse_json_lenient(txt: str) -> Dict[str, Any]:
+    """Parse JSON, tolerating trailing HTML warnings added by the upstream service."""
+    try:
+        return json.loads(txt)
+    except Exception as e1:
+        try:
+            start = txt.find('{')
+            end = txt.rfind('}')
+            if start != -1 and end != -1 and end > start:
+                chunk = txt[start:end+1]
+                return json.loads(chunk)
+        except Exception as e2:
+            print(f"[error] lenient parse failed: {e2}")
+        print(f"[error] JSON parse failed: {e1}")
+        raise HTTPException(status_code=502, detail=f"WorldPop returned non-JSON: {e1}")
 
 # --- geometry helpers (geodesic-ish) ---
 
@@ -222,7 +258,7 @@ def _fetch_task_result(client: httpx.Client, taskid: str, log_body_chars: int,
         preview = tr.text[:log_body_chars] if tr.text else ""
         print(f"[task] attempt#{attempt} status={tr.status_code} preview={preview!r}")
         tr.raise_for_status()
-        last = tr.json()
+        last = _parse_json_lenient(tr.text or '')
         tstatus = last.get("status")
         terror  = last.get("error")
         print(f"[task] state={tstatus} error={terror}")
@@ -308,12 +344,7 @@ def _worldpop_population_for_geojson(client: httpx.Client, dataset: str, year: i
     body_preview = r.text[:log_body_chars] if r.text else ""
     print(f"[http] stats.body_preview={body_preview!r}")
     r.raise_for_status()
-
-    try:
-        data = r.json()
-    except Exception as je:
-        print(f"[error] JSON parse failed: {je}")
-        raise HTTPException(status_code=502, detail=f"WorldPop returned non-JSON: {je}")
+    data = _parse_json_lenient(r.text or '')
 
     print(f"[stats.response] keys={list(data.keys())} status={data.get('status')} taskid={data.get('taskid')} error={data.get('error')}")
 
@@ -343,6 +374,50 @@ def _worldpop_population_for_geojson(client: httpx.Client, dataset: str, year: i
     print(f"[unexpected] response shape with no inline data and no pollable task: {data}")
     raise HTTPException(status_code=502, detail="WorldPop returned an unexpected response.")
 
+
+def _slice_population_sum(
+    client: httpx.Client,
+    dataset: str,
+    year: int,
+    lon_f: float,
+    lat_f: float,
+    requested_radius: float,
+    b_start: float,
+    b_end: float,
+    circle_steps: int,
+    api_key: Optional[str],
+    log_body_chars: int,
+    allowance_safety: float,
+) -> float:
+    """Fetch population for a single sector slice, with a one-level allowance fallback split."""
+    print(f"[slice.thread] bearings_deg=[{math.degrees(b_start):.2f},{math.degrees(b_end):.2f}]")
+    gj = sector_as_geojson(lon_f, lat_f, requested_radius, b_start, b_end, circle_steps=circle_steps)
+    gj_str = json.dumps(gj, separators=(",", ":"))
+    try:
+        return _worldpop_population_for_geojson(
+            client, dataset, year, gj_str, api_key, log_body_chars,
+            clamp_on_area_limit=False, allowance_safety=allowance_safety
+        )
+    except HTTPException as he:
+        # If a slice still trips allowance (shouldn't), split once more (half-arc) and sum
+        try:
+            detail = he.detail if isinstance(he.detail, str) else ""
+        except Exception:
+            detail = ""
+        if isinstance(detail, str) and "allowance" in detail:
+            print("[slice.allowance.thread] exceeded allowance; subdividing into 2 half-slices")
+            half_arc = (b_start + b_end) / 2
+            subtotal = 0.0
+            for (bs, be) in ((b_start, half_arc), (half_arc, b_end)):
+                gj_sub = sector_as_geojson(lon_f, lat_f, requested_radius, bs, be, circle_steps=circle_steps)
+                gj_sub_str = json.dumps(gj_sub, separators=(",", ":"))
+                subtotal += _worldpop_population_for_geojson(
+                    client, dataset, year, gj_sub_str, api_key, log_body_chars,
+                    clamp_on_area_limit=False, allowance_safety=allowance_safety
+                )
+            return subtotal
+        raise
+
 # ---------------------------------
 # Endpoint: population only (with tiling)
 # ---------------------------------
@@ -360,6 +435,7 @@ def get_population(
     max_area_km2_hint: float = Query(100000.0, gt=0, description="WorldPop per-request area allowance (hint)"),
     allowance_safety: float = Query(0.97, ge=0.5, le=0.999, description="Factor below allowance for sizing slices"),
     circle_steps: int = Query(64, ge=32, le=512, description="Resolution of circle/arc discretization"),
+    concurrency: int = Query(12, ge=1, le=32, description="Max parallel slice requests"),
 ):
     print(f"[start] lat={lat} lon={lon} radius_km={radius} year={year} dataset={dataset} key={mask_key(api_key)} "
           f"debug={debug} max_area_km2_hint={max_area_km2_hint} safety={allowance_safety}")
@@ -393,41 +469,39 @@ def get_population(
     print(f"[tiling] total_area≈{total_area:.2f} km²; per_slice_target≤{per_slice_area_target:.2f} -> slices={N} (arc={math.degrees(arc):.2f}° each)")
 
     grand_total = 0.0
-    per_slice = []
+    per_slice: List[float] = [0.0] * N
 
-    with httpx.Client(timeout=60.0) as client:
-        for i in range(N):
-            b_start = i * arc
-            b_end   = (i + 1) * arc
-            print(f"[slice] {i+1}/{N} bearings_deg=[{math.degrees(b_start):.2f},{math.degrees(b_end):.2f}]")
-            gj = sector_as_geojson(lon_f, lat_f, requested_radius, b_start, b_end, circle_steps=circle_steps)
-            gj_str = json.dumps(gj, separators=(",", ":"))
-            try:
-                pop_i = _worldpop_population_for_geojson(
-                    client, dataset, year, gj_str, api_key, log_body_chars,
-                    clamp_on_area_limit=False, allowance_safety=allowance_safety
+    # Configure a larger connection pool to support higher concurrency
+    limits = httpx.Limits(
+        max_connections=max(16, min(256, concurrency * 4)),
+        max_keepalive_connections=max(8, min(128, concurrency * 2)),
+    )
+    with httpx.Client(timeout=60.0, limits=limits) as client:
+        max_workers = max(2, min(concurrency, N))
+        print(f"[tiling.concurrent] launching {N} slice requests with up to {max_workers} workers")
+        with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = []
+            for i in range(N):
+                b_start = i * arc
+                b_end = (i + 1) * arc
+                fut = ex.submit(
+                    _slice_population_sum,
+                    client, dataset, year,
+                    lon_f, lat_f, requested_radius,
+                    b_start, b_end, circle_steps,
+                    api_key, log_body_chars, allowance_safety,
                 )
-            except HTTPException as he:
-                # If a slice still trips allowance (shouldn't), split it once more (half-arc) and sum
-                if isinstance(he.detail, str) and "allowance" in he.detail:
-                    print(f"[slice.allowance] slice {i+1}/{N} exceeded allowance unexpectedly; subdividing into 2 half-slices")
-                    half_arc = (b_start + b_end)/2
-                    subtotal = 0.0
-                    for j, (bs, be) in enumerate(((b_start, half_arc), (half_arc, b_end)), start=1):
-                        gj_sub = sector_as_geojson(lon_f, lat_f, requested_radius, bs, be, circle_steps=circle_steps)
-                        gj_sub_str = json.dumps(gj_sub, separators=(",", ":"))
-                        pop_sub = _worldpop_population_for_geojson(
-                            client, dataset, year, gj_sub_str, api_key, log_body_chars,
-                            clamp_on_area_limit=False, allowance_safety=allowance_safety
-                        )
-                        subtotal += pop_sub
-                        print(f"[slice.sub] {i+1}.{j} subtotal_now={subtotal}")
-                    pop_i = subtotal
-                else:
-                    raise
-            grand_total += pop_i
-            per_slice.append(pop_i)
-            print(f"[slice.done] {i+1}/{N} pop={pop_i} running_total={grand_total}")
+                futs.append((i, fut))
+
+            for i, fut in futs:
+                try:
+                    pop_i = fut.result()
+                except Exception as e:
+                    print(f"[slice.error.concurrent] {i+1}/{N} error={e}")
+                    pop_i = 0.0
+                per_slice[i] = pop_i
+                grand_total += pop_i
+                print(f"[slice.done.concurrent] {i+1}/{N} pop={pop_i} running_total={grand_total}")
 
     resp = {
         "population": grand_total,

@@ -1,0 +1,14 @@
+.git
+.idea
+.vscode
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+api/.venv/
+api/venv/
+api/__pycache__/
+api/*.pyc
+docker/
+

@@ -66,6 +66,35 @@ Example population query:
 
 `curl 'http://localhost:8080/getPopulation?lat=0&lon=0&radius=50'`
 
+## Docker
+
+Build and run both frontend and API with Docker Compose:
+
+- Prereq (optional, for better `/isOcean` results): create `api/.env` with `GEONAMES_USERNAME=<your_geonames_username>`.
+
+1) Build images:
+
+   `docker compose build`
+
+2) Run services:
+
+   `docker compose up`
+
+3) Open the app:
+
+   - Frontend: `http://localhost:8000/index.html` (or `http://localhost:8000/asteroid.html`)
+   - API is internal-only; proxy health via frontend: `http://localhost:8000/health`
+
+Images and services:
+
+- Frontend: `nginx:alpine` serving static files (port 8000 → 80)
+- API: Python 3.11 + Uvicorn (internal on 8080, not published)
+
+Notes:
+
+- Do not commit secrets. `api/.env` is git‑ignored and loaded by Compose.
+- API is only reachable from the frontend container via Nginx; no host port is published.
+
 ## Using the App
 
 - Enter or keep `DEMO_KEY` for NASA API key (stored locally) and load today’s feed or pick a historical range.

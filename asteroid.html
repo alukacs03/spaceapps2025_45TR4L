@@ -2057,9 +2057,8 @@
     }
     // Population-by-ring UI removed per requirements
     function apiBases() {
-        // API lives on localhost:8080
-        const proto = window.location.protocol || 'http:';
-        return [`${proto}//localhost:8080`];
+        // Use same-origin as the frontend; Nginx proxies to backend
+        return [window.location.origin || 'http://localhost:8000'];
     }
     async function fetchJSON(path, params) {
         const qs = params ? ('?' + new URLSearchParams(params).toString()) : '';

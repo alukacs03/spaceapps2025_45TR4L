@@ -3,7 +3,7 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Terv 2.0 – NEO Impact Simulator</title>
+		<title>Project Perigee – NEO Impact Simulator</title>
 		<link
 			rel="stylesheet"
 			href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -34,12 +34,13 @@
 					Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol, Noto Color Emoji;
 			}
 			a { color: var(--accent-2); text-decoration: none; }
-			header {
-				position: sticky; top: 0; z-index: 50;
-				background: linear-gradient(180deg, #0b0e14, #0b0e1400 80%);
-				border-bottom: 1px solid var(--border);
-				backdrop-filter: blur(6px);
-			}
+            header {
+                position: sticky; top: 0; z-index: 50;
+                background: linear-gradient(180deg, #0b0e14, #0b0e1400 80%);
+                border-bottom: 1px solid var(--border);
+                /* backdrop-filter is visually nice but heavy on Safari/Firefox memory; disable for stability */
+                /* backdrop-filter: blur(6px); */
+            }
 			.wrap { max-width: 1200px; margin: 0 auto; padding: 18px 20px; }
 			.title {
 				display: flex; align-items: center; gap: 12px;
@@ -128,9 +129,10 @@
 							</linearGradient>
 						</defs>
 					</svg>
-					<h1>Terv 2.0</h1>
+					<h1>Project Perigee</h1>
 				</div>
 				<div class="subtitle">Interactive NEO impact simulation explorer</div>
+				<div class="note">By Ákos Lukács, Daniel Brendan Woods, and Erik Gasteiger.</div>
 				<div class="spacer"></div>
 				<div class="stepper">
 					<div class="step"><div class="n">1</div> List NEO feed</div>
@@ -195,9 +197,15 @@
                             <label>Velocity (km/s)</label>
                             <input id="custVelocity" type="number" min="0.1" step="0.1" value="17" />
                         </div>
-                        <div class="fld">
-                            <label>Density (kg/m³)</label>
-                            <input id="custDensity" type="number" min="500" step="100" value="3000" />
+                        <div class="fld" style="grid-column: 1 / -1;">
+                            <label>Composition (density)</label>
+                            <select id="custDensity">
+                                <option value="3000" selected>Stone (stony/ordinary chondrite): 3,000 kg/m³</option>
+                                <option value="7800">Iron (Fe–Ni metal): 7,800 kg/m³</option>
+                                <option value="1800">Carbon (carbonaceous chondrite): 1,800 kg/m³</option>
+                                <option value="500">Comet (icy, porous nucleus): 500 kg/m³</option>
+                                <option value="19300">Gold (Au, pure metal): 19,300 kg/m³</option>
+                            </select>
                         </div>
                     </div>
                     <div class="spacer"></div>
@@ -253,10 +261,23 @@
 			<section class="panel">
 				<h2>About this tool</h2>
 				<p class="note">
-					This is a hackathon prototype for educational and decision-support exploration. It uses NASA NeoWs for NEO data
-					and can query WorldPop via a small API to estimate exposed population by ring distance. For 3D visualization, see the
-					linked viewer. Physics are simplified; values are ballpark estimates, not mission-design outputs.
+					Created for NASA Space Apps Challenge 2025 — Meteor Madness:
+					<a href="https://www.spaceappschallenge.org/2025/challenges/meteor-madness/" target="_blank" rel="noopener">spaceappschallenge.org/2025/challenges/meteor-madness/</a>.
+					It uses NASA NeoWs for NEO data and queries WorldPop via a small API to estimate exposed population by ring distance.
+					For 3D visualization, see the linked viewer.
 				</p>
+			</section>
+
+			<section class="panel" aria-label="GitHub" style="margin-top: 16px;">
+				<h2>GitHub</h2>
+				<div class="row">
+					<a class="btn secondary" href="https://github.com/alukacs03/spaceapps2025_45TR4L" target="_blank" rel="noopener">Open on GitHub</a>
+					<span class="note">github.com/alukacs03/spaceapps2025_45TR4L</span>
+				</div>
+			</section>
+
+			<section class="panel" aria-label="Build note" style="margin-top: 16px;">
+				<div class="note"><span class="pill" aria-hidden="true" style="margin-right:6px;">i</span>Portions of this project were generated with the assistance of AI coding tools.</div>
 			</section>
 		</main>
 
@@ -473,25 +494,38 @@ function selectAsteroid(it, el = null) {
 			}
 
 			// --- Map & rings ---
-			let map, marker;
-			function initMap() {
-				map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
-				L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-					maxZoom: 12,
-					attribution: '&copy; OpenStreetMap contributors'
-				}).addTo(map);
-				marker = L.marker([0,0], { draggable: true }).addTo(map);
-				marker.on('dragend', () => {
-					const p = marker.getLatLng();
-					$('lat').value = p.lat.toFixed(4);
-					$('lon').value = p.lng.toFixed(4);
-				});
-				map.on('click', (e) => {
-					marker.setLatLng(e.latlng);
-					$('lat').value = e.latlng.lat.toFixed(4);
-					$('lon').value = e.latlng.lng.toFixed(4);
-				});
-			}
+            let map, marker, tileLayer;
+            function initMap() {
+                // Conservative Leaflet options to reduce memory: disable retina, keepBuffer=0, idle updates only
+                map = L.map('map', { zoomControl: true, inertia: false, zoomAnimation: true }).setView([20, 0], 2);
+                tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 12,
+                    detectRetina: false,
+                    updateWhenIdle: true,
+                    updateWhenZooming: false,
+                    keepBuffer: 0,
+                    crossOrigin: false,
+                    tileSize: 256,
+                    attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(map);
+                marker = L.marker([0,0], { draggable: true }).addTo(map);
+                marker.on('dragend', () => {
+                    const p = marker.getLatLng();
+                    $('lat').value = p.lat.toFixed(4);
+                    $('lon').value = p.lng.toFixed(4);
+                });
+                map.on('click', (e) => {
+                    marker.setLatLng(e.latlng);
+                    $('lat').value = e.latlng.lat.toFixed(4);
+                    $('lon').value = e.latlng.lng.toFixed(4);
+                });
+            }
+            function disposeMap() {
+                try { if (marker) { marker.off(); } } catch(_) {}
+                try { if (tileLayer) { tileLayer.remove(); tileLayer = null; } } catch(_) {}
+                try { if (map) { map.off(); map.remove(); } } catch(_) {}
+                map = null; marker = null;
+            }
 
             async function estimatePopulation() {
 				const lat = Number($('lat').value);
@@ -591,24 +625,27 @@ function selectAsteroid(it, el = null) {
 
 			// --- Wire up UI ---
             window.addEventListener('DOMContentLoaded', () => {
-				loadKey();
-				$('saveKey').addEventListener('click', storeKey);
-				$('loadToday').addEventListener('click', loadToday);
-				$('loadHistorical').addEventListener('click', loadHistorical);
-				$('calcEnergy').addEventListener('click', estimateEnergy);
-				$('useCustom').addEventListener('click', useCustomAsteroid);
+                loadKey();
+                $('saveKey').addEventListener('click', storeKey);
+                $('loadToday').addEventListener('click', loadToday);
+                $('loadHistorical').addEventListener('click', loadHistorical);
+                $('calcEnergy').addEventListener('click', estimateEnergy);
+                $('useCustom').addEventListener('click', useCustomAsteroid);
                 $('launchBtn').addEventListener('click', performLaunch);
                 $('locSearchBtn').addEventListener('click', searchLocation);
                 $('locSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); searchLocation(); } });
-				['lat','lon'].forEach(id => $(id).addEventListener('input', maybeEnableLaunch));
-				initMap();
-				// prefill historical range with last 7 days
-				const now = new Date();
-				const a = new Date(now.getTime() - 6*86400000);
-				$('histStart').value = a.toISOString().slice(0,10);
-				$('histEnd').value = now.toISOString().slice(0,10);
-				maybeEnableLaunch();
-			});
-		</script>
+                ['lat','lon'].forEach(id => $(id).addEventListener('input', maybeEnableLaunch));
+                initMap();
+                // prefill historical range with last 7 days
+                const now = new Date();
+                const a = new Date(now.getTime() - 6*86400000);
+                $('histStart').value = a.toISOString().slice(0,10);
+                $('histEnd').value = now.toISOString().slice(0,10);
+                maybeEnableLaunch();
+            });
+            // Ensure cleanup when navigating away to avoid retaining tiles in memory
+            window.addEventListener('pagehide', disposeMap);
+            window.addEventListener('unload', disposeMap);
+        </script>
 	</body>
 	</html>

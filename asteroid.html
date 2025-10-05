@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8"/>
-    <title>Globe + Three.js Objects</title>
+    <title>Project Perigee – 3D Impact Viewer</title>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>
         body {
@@ -39,7 +39,8 @@
             background: linear-gradient(180deg, #121826, #1a2333);
             color: #e6eefc;
             border-left: 1px solid #22304a;
-            padding: 14px 14px 18px;
+            /* generous bottom padding so content never sits under sticky footer */
+            padding: 14px 14px 140px;
             overflow: auto;
             font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
             position: relative;
@@ -52,6 +53,40 @@
         #statsPanel .t { color: #9fb3c8; font-size: 12px; }
         #statsPanel .v { font-weight: 700; }
         #viewRoot.split #statsPanel { display: block; height: 100vh; grid-area: 1 / 2 / 2 / 3; }
+        /* KPI info badge */
+        #statsPanel .with-info { display: inline-flex; align-items: center; gap: 6px; }
+        #statsPanel .info-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px; height: 16px;
+            border: 1px solid #3a4a6a;
+            border-radius: 50%;
+            font-size: 10px;
+            line-height: 1;
+            color: #9fb3c8;
+            cursor: help;
+            user-select: none;
+        }
+        #statsPanel .info-badge:hover { background: #1e2a40; }
+        /* Any titled element should show help cursor for discoverability */
+        #statsPanel [title] { cursor: help; }
+        /* Sticky footer for action button */
+        #statsPanel .footer {
+            position: sticky;
+            bottom: 0;
+            background: linear-gradient(180deg, rgba(18,24,38,0.0), #121826 35%);
+            padding: 12px 0 16px;
+            margin: 6px 0 0;
+            border-top: 1px solid #22304a;
+            display: flex;
+            justify-content: center;
+            z-index: 2;
+        }
+        #statsPanel .footer button {
+            width: 100%;
+            max-width: 260px;
+        }
     </style>
 </head>
 <body>
@@ -105,20 +140,252 @@
     // Post-impact zoom state
     let zoomTransition = { active: false, start: 0, dur: 1200, fromPos: null, toPos: null, fromFov: 85, toFov: 38, aim: null };
 
-    // Fallback city sample used only if API is unavailable
-    const largeCities = [
-        { name: 'Berlin', lat: 52.5200, lng: 13.4050, pop: 3700000 },
+    // Extended capitals fallback (selected world capitals; not exhaustive, but large)
+    const capitalsExtended = [
+        // Europe
+        { name: 'Amsterdam', lat: 52.3676, lng: 4.9041, pop: 872000 },
+        { name: 'Andorra la Vella', lat: 42.5063, lng: 1.5218, pop: 22600 },
+        { name: 'Athens', lat: 37.9838, lng: 23.7275, pop: 3090000 },
+        { name: 'Belgrade', lat: 44.7866, lng: 20.4489, pop: 1376000 },
+        { name: 'Berlin', lat: 52.5200, lng: 13.4050, pop: 3769000 },
+        { name: 'Bern', lat: 46.9480, lng: 7.4474, pop: 133000 },
+        { name: 'Bratislava', lat: 48.1486, lng: 17.1077, pop: 430000 },
+        { name: 'Brussels', lat: 50.8503, lng: 4.3517, pop: 1210000 },
+        { name: 'Bucharest', lat: 44.4268, lng: 26.1025, pop: 1883000 },
         { name: 'Budapest', lat: 47.4979, lng: 19.0402, pop: 1750000 },
-        { name: 'London', lat: 51.5074, lng: -0.1278, pop: 11000000 },
-        { name: 'Paris', lat: 48.8566, lng: 2.3522, pop: 11000000 },
-        { name: 'New York', lat: 40.7128, lng: -74.0060, pop: 18800000 }
+        { name: 'Chisinau', lat: 47.0105, lng: 28.8638, pop: 639000 },
+        { name: 'Copenhagen', lat: 55.6761, lng: 12.5683, pop: 794000 },
+        { name: 'Dublin', lat: 53.3498, lng: -6.2603, pop: 553000 },
+        { name: 'Helsinki', lat: 60.1699, lng: 24.9384, pop: 655000 },
+        { name: 'Kiev', lat: 50.4501, lng: 30.5234, pop: 2967000 },
+        { name: 'Lisbon', lat: 38.7223, lng: -9.1393, pop: 504000 },
+        { name: 'Ljubljana', lat: 46.0569, lng: 14.5058, pop: 295000 },
+        { name: 'London', lat: 51.5074, lng: -0.1278, pop: 9000000 },
+        { name: 'Luxembourg', lat: 49.6116, lng: 6.1319, pop: 122000 },
+        { name: 'Madrid', lat: 40.4168, lng: -3.7038, pop: 3223000 },
+        { name: 'Minsk', lat: 53.9045, lng: 27.5615, pop: 2000000 },
+        { name: 'Monaco', lat: 43.7384, lng: 7.4246, pop: 39000 },
+        { name: 'Moscow', lat: 55.7558, lng: 37.6173, pop: 12500000 },
+        { name: 'Oslo', lat: 59.9139, lng: 10.7522, pop: 681000 },
+        { name: 'Paris', lat: 48.8566, lng: 2.3522, pop: 2148000 },
+        { name: 'Podgorica', lat: 42.4304, lng: 19.2594, pop: 186000 },
+        { name: 'Prague', lat: 50.0755, lng: 14.4378, pop: 1309000 },
+        { name: 'Reykjavik', lat: 64.1466, lng: -21.9426, pop: 131000 },
+        { name: 'Riga', lat: 56.9496, lng: 24.1052, pop: 632000 },
+        { name: 'Rome', lat: 41.9028, lng: 12.4964, pop: 2873000 },
+        { name: 'San Marino', lat: 43.9424, lng: 12.4578, pop: 28000 },
+        { name: 'Sarajevo', lat: 43.8563, lng: 18.4131, pop: 344000 },
+        { name: 'Skopje', lat: 41.9981, lng: 21.4254, pop: 546000 },
+        { name: 'Sofia', lat: 42.6977, lng: 23.3219, pop: 1246000 },
+        { name: 'Stockholm', lat: 59.3293, lng: 18.0686, pop: 975000 },
+        { name: 'Tallinn', lat: 59.4370, lng: 24.7536, pop: 426000 },
+        { name: 'Tirana', lat: 41.3275, lng: 19.8189, pop: 421000 },
+        { name: 'Vaduz', lat: 47.141, lng: 9.521, pop: 6000 },
+        { name: 'Valletta', lat: 35.8989, lng: 14.5146, pop: 6000 },
+        { name: 'Vienna', lat: 48.2082, lng: 16.3738, pop: 1897000 },
+        { name: 'Vilnius', lat: 54.6872, lng: 25.2797, pop: 588000 },
+        { name: 'Warsaw', lat: 52.2297, lng: 21.0122, pop: 1790000 },
+        { name: 'Zagreb', lat: 45.8150, lng: 15.9819, pop: 806000 },
+        // Americas
+        { name: 'Washington', lat: 38.9072, lng: -77.0369, pop: 705000 },
+        { name: 'Ottawa', lat: 45.4215, lng: -75.6972, pop: 994000 },
+        { name: 'Mexico City', lat: 19.4326, lng: -99.1332, pop: 8855000 },
+        { name: 'Guatemala City', lat: 14.6349, lng: -90.5069, pop: 995000 },
+        { name: 'Belmopan', lat: 17.2510, lng: -88.7590, pop: 17000 },
+        { name: 'San Salvador', lat: 13.6929, lng: -89.2182, pop: 567000 },
+        { name: 'Tegucigalpa', lat: 14.0723, lng: -87.1921, pop: 1200000 },
+        { name: 'Managua', lat: 12.1140, lng: -86.2362, pop: 1026000 },
+        { name: 'San José', lat: 9.9281, lng: -84.0907, pop: 333000 },
+        { name: 'Panama City', lat: 8.9824, lng: -79.5199, pop: 880000 },
+        { name: 'Havana', lat: 23.1136, lng: -82.3666, pop: 2130000 },
+        { name: 'Nassau', lat: 25.0478, lng: -77.3554, pop: 275000 },
+        { name: 'Kingston', lat: 17.9712, lng: -76.7920, pop: 580000 },
+        { name: 'Santo Domingo', lat: 18.4861, lng: -69.9312, pop: 965000 },
+        { name: 'Port-au-Prince', lat: 18.5944, lng: -72.3074, pop: 987000 },
+        { name: 'Port of Spain', lat: 10.6600, lng: -61.5080, pop: 370000 },
+        { name: 'Bridgetown', lat: 13.0975, lng: -59.6167, pop: 110000 },
+        { name: 'Castries', lat: 14.0101, lng: -60.9875, pop: 20000 },
+        { name: 'St. John’s', lat: 17.1274, lng: -61.8468, pop: 22000 },
+        { name: 'Roseau', lat: 15.3010, lng: -61.3870, pop: 14000 },
+        { name: 'Kralendijk', lat: 12.1444, lng: -68.2656, pop: 20000 },
+        { name: 'Oranjestad', lat: 12.5092, lng: -70.0086, pop: 35000 },
+        { name: 'Willemstad', lat: 12.1224, lng: -68.8825, pop: 150000 },
+        { name: 'Bogotá', lat: 4.7110, lng: -74.0721, pop: 7744000 },
+        { name: 'Quito', lat: -0.1807, lng: -78.4678, pop: 2011000 },
+        { name: 'Lima', lat: -12.0464, lng: -77.0428, pop: 9675000 },
+        { name: 'La Paz', lat: -16.4897, lng: -68.1193, pop: 757000 },
+        { name: 'Sucre', lat: -19.0196, lng: -65.2619, pop: 260000 },
+        { name: 'Santiago', lat: -33.4489, lng: -70.6693, pop: 5744000 },
+        { name: 'Buenos Aires', lat: -34.6037, lng: -58.3816, pop: 2890000 },
+        { name: 'Montevideo', lat: -34.9011, lng: -56.1645, pop: 1380000 },
+        { name: 'Asunción', lat: -25.2637, lng: -57.5759, pop: 524000 },
+        { name: 'Brasília', lat: -15.7939, lng: -47.8828, pop: 3015000 },
+        { name: 'Paramaribo', lat: 5.8520, lng: -55.2038, pop: 240000 },
+        { name: 'Georgetown', lat: 6.8013, lng: -58.1553, pop: 118000 },
+        // Africa
+        { name: 'Cairo', lat: 30.0444, lng: 31.2357, pop: 9900000 },
+        { name: 'Algiers', lat: 36.7538, lng: 3.0588, pop: 3416000 },
+        { name: 'Tunis', lat: 36.8065, lng: 10.1815, pop: 1050000 },
+        { name: 'Rabat', lat: 34.0209, lng: -6.8416, pop: 580000 },
+        { name: 'Tripoli', lat: 32.8872, lng: 13.1913, pop: 1150000 },
+        { name: 'Khartoum', lat: 15.5007, lng: 32.5599, pop: 5260000 },
+        { name: 'Addis Ababa', lat: 8.9806, lng: 38.7578, pop: 3041000 },
+        { name: 'Nairobi', lat: -1.2921, lng: 36.8219, pop: 4397000 },
+        { name: 'Kampala', lat: 0.3476, lng: 32.5825, pop: 1650000 },
+        { name: 'Kigali', lat: -1.9579, lng: 30.1127, pop: 745000 },
+        { name: 'Dodoma', lat: -6.1630, lng: 35.7516, pop: 410000 },
+        { name: 'Kinshasa', lat: -4.4419, lng: 15.2663, pop: 11900000 },
+        { name: 'Brazzaville', lat: -4.2634, lng: 15.2429, pop: 1870000 },
+        { name: 'Luanda', lat: -8.8390, lng: 13.2894, pop: 2570000 },
+        { name: 'Gaborone', lat: -24.6282, lng: 25.9231, pop: 232000 },
+        { name: 'Harare', lat: -17.8292, lng: 31.0522, pop: 1489000 },
+        { name: 'Maputo', lat: -25.9692, lng: 32.5732, pop: 1100000 },
+        { name: 'Pretoria', lat: -25.7479, lng: 28.2293, pop: 741000 },
+        { name: 'Cape Town', lat: -33.9249, lng: 18.4241, pop: 4337000 },
+        { name: 'Maseru', lat: -29.3151, lng: 27.4869, pop: 331000 },
+        { name: 'Mbabane', lat: -26.3054, lng: 31.1367, pop: 95000 },
+        { name: 'Antananarivo', lat: -18.8792, lng: 47.5079, pop: 1390000 },
+        { name: 'Port Louis', lat: -20.1609, lng: 57.5012, pop: 148000 },
+        { name: 'Victoria', lat: -4.6191, lng: 55.4513, pop: 26000 },
+        { name: 'Lusaka', lat: -15.3875, lng: 28.3228, pop: 1743000 },
+        { name: 'Lilongwe', lat: -13.9626, lng: 33.7741, pop: 989000 },
+        { name: 'Bujumbura', lat: -3.3614, lng: 29.3599, pop: 331000 },
+        { name: 'Abuja', lat: 9.0765, lng: 7.3986, pop: 1236000 },
+        { name: 'Accra', lat: 5.6037, lng: -0.1870, pop: 2300000 },
+        { name: 'Lomé', lat: 6.1725, lng: 1.2314, pop: 837000 },
+        { name: 'Cotonou', lat: 6.3703, lng: 2.3912, pop: 680000 },
+        { name: 'Porto-Novo', lat: 6.4969, lng: 2.6289, pop: 265000 },
+        { name: 'Ouagadougou', lat: 12.3714, lng: -1.5197, pop: 2450000 },
+        { name: 'Niamey', lat: 13.5116, lng: 2.1254, pop: 1200000 },
+        { name: 'Bamako', lat: 12.6392, lng: -7.9999, pop: 2250000 },
+        { name: 'Dakar', lat: 14.7167, lng: -17.4677, pop: 1146000 },
+        { name: 'Banjul', lat: 13.4549, lng: -16.5790, pop: 31000 },
+        { name: 'Praia', lat: 14.9330, lng: -23.5133, pop: 159000 },
+        { name: 'Nouakchott', lat: 18.0735, lng: -15.9582, pop: 960000 },
+        { name: 'Al-Uyun', lat: 27.1536, lng: -13.2033, pop: 220000 },
+        { name: 'Freetown', lat: 8.4657, lng: -13.2317, pop: 1050000 },
+        { name: 'Conakry', lat: 9.6412, lng: -13.5784, pop: 1660000 },
+        { name: 'Monrovia', lat: 6.3156, lng: -10.8074, pop: 1060000 },
+        { name: 'Abidjan', lat: 5.3476, lng: -4.0276, pop: 4765000 },
+        { name: 'Yamoussoukro', lat: 6.8276, lng: -5.2893, pop: 212000 },
+        { name: 'Yaoundé', lat: 3.8480, lng: 11.5021, pop: 2440000 },
+        { name: 'Libreville', lat: 0.4162, lng: 9.4673, pop: 797000 },
+        { name: 'Malabo', lat: 3.7500, lng: 8.7833, pop: 297000 },
+        // Asia & Oceania
+        { name: 'Ankara', lat: 39.9334, lng: 32.8597, pop: 5500000 },
+        { name: 'Yerevan', lat: 40.1772, lng: 44.5035, pop: 1090000 },
+        { name: 'Tbilisi', lat: 41.7151, lng: 44.8271, pop: 1190000 },
+        { name: 'Baku', lat: 40.4093, lng: 49.8671, pop: 2220000 },
+        { name: 'Tehran', lat: 35.6892, lng: 51.3890, pop: 8847000 },
+        { name: 'Baghdad', lat: 33.3128, lng: 44.3615, pop: 7181000 },
+        { name: 'Riyadh', lat: 24.7136, lng: 46.6753, pop: 6880000 },
+        { name: 'Kuwait City', lat: 29.3759, lng: 47.9774, pop: 3000000 },
+        { name: 'Manama', lat: 26.2235, lng: 50.5876, pop: 200000 },
+        { name: 'Doha', lat: 25.2854, lng: 51.5310, pop: 956000 },
+        { name: 'Abu Dhabi', lat: 24.4539, lng: 54.3773, pop: 1500000 },
+        { name: 'Muscat', lat: 23.5859, lng: 58.4059, pop: 1420000 },
+        { name: 'Sanaa', lat: 15.3694, lng: 44.1910, pop: 2950000 },
+        { name: 'Amman', lat: 31.9539, lng: 35.9106, pop: 4000000 },
+        { name: 'Damascus', lat: 33.5138, lng: 36.2765, pop: 1711000 },
+        { name: 'Beirut', lat: 33.8938, lng: 35.5018, pop: 2400000 },
+        { name: 'Jerusalem', lat: 31.7683, lng: 35.2137, pop: 936000 },
+        { name: 'Cairo', lat: 30.0444, lng: 31.2357, pop: 9900000 },
+        { name: 'Nur-Sultan', lat: 51.1694, lng: 71.4491, pop: 1000000 },
+        { name: 'Tashkent', lat: 41.2995, lng: 69.2401, pop: 2550000 },
+        { name: 'Bishkek', lat: 42.8746, lng: 74.5698, pop: 1000000 },
+        { name: 'Dushanbe', lat: 38.5598, lng: 68.7870, pop: 863000 },
+        { name: 'Ashgabat', lat: 37.9601, lng: 58.3261, pop: 1037000 },
+        { name: 'Ulaanbaatar', lat: 47.8864, lng: 106.9057, pop: 1480000 },
+        { name: 'New Delhi', lat: 28.6139, lng: 77.2090, pop: 16787941 },
+        { name: 'Islamabad', lat: 33.6844, lng: 73.0479, pop: 1016000 },
+        { name: 'Kathmandu', lat: 27.7172, lng: 85.3240, pop: 1440000 },
+        { name: 'Thimphu', lat: 27.4728, lng: 89.6390, pop: 115000 },
+        { name: 'Dhaka', lat: 23.8103, lng: 90.4125, pop: 8906000 },
+        { name: 'Colombo', lat: 6.9271, lng: 79.8612, pop: 561000 },
+        { name: 'Malé', lat: 4.1755, lng: 73.5093, pop: 252000 },
+        { name: 'Naypyidaw', lat: 19.7633, lng: 96.0785, pop: 1160000 },
+        { name: 'Bangkok', lat: 13.7563, lng: 100.5018, pop: 8281000 },
+        { name: 'Vientiane', lat: 17.9757, lng: 102.6331, pop: 948000 },
+        { name: 'Hanoi', lat: 21.0278, lng: 105.8342, pop: 8000000 },
+        { name: 'Phnom Penh', lat: 11.5564, lng: 104.9282, pop: 2129000 },
+        { name: 'Kuala Lumpur', lat: 3.1390, lng: 101.6869, pop: 1800000 },
+        { name: 'Singapore', lat: 1.3521, lng: 103.8198, pop: 5639000 },
+        { name: 'Bandar Seri Begawan', lat: 4.9031, lng: 114.9398, pop: 100000 },
+        { name: 'Jakarta', lat: -6.2088, lng: 106.8456, pop: 10187000 },
+        { name: 'Manila', lat: 14.5995, lng: 120.9842, pop: 1780000 },
+        { name: 'Tokyo', lat: 35.6762, lng: 139.6503, pop: 13929286 },
+        { name: 'Seoul', lat: 37.5665, lng: 126.9780, pop: 9776000 },
+        { name: 'Pyongyang', lat: 39.0392, lng: 125.7625, pop: 3100000 },
+        { name: 'Beijing', lat: 39.9042, lng: 116.4074, pop: 21540000 },
+        { name: 'Taipei', lat: 25.0330, lng: 121.5654, pop: 2602000 },
+        { name: 'Ulaanbaatar', lat: 47.8864, lng: 106.9057, pop: 1480000 },
+        { name: 'Canberra', lat: -35.2809, lng: 149.1300, pop: 462000 },
+        { name: 'Wellington', lat: -41.2866, lng: 174.7756, pop: 215000 },
+        { name: 'Suva', lat: -18.1248, lng: 178.4501, pop: 88271 },
+        { name: 'Port Moresby', lat: -9.4438, lng: 147.1803, pop: 383000 },
+        { name: 'Honiara', lat: -9.4456, lng: 159.9729, pop: 68000 },
+        { name: 'Apia', lat: -13.8333, lng: -171.8333, pop: 37500 },
+        { name: 'Nukuʻalofa', lat: -21.1394, lng: -175.2042, pop: 24000 }
     ];
     let labelsAttached = false;
     let envIsOcean = false;
 
-    const globe = Globe()
-        .globeImageUrl('./resources/8081_earthmap10k.jpg')
-        .bumpImageUrl('./resources/8081_earthbump10k.jpg')
+    // --- Performance mode ---
+    // Force high-quality rendering and assets.
+    const PERF = 'high';
+    const MAX_CAPITAL_LABELS = 100;
+    const STEPS_POLY = 128;
+    const STEPS_RIM = 256;
+    const STEPS_HOVER = 192;
+
+    // Create Globe with a conservative WebGL config to avoid context failures
+    const globeContainer = document.getElementById('globeViz');
+    function createGlobeInstance() {
+        const primaryConfig = {
+            rendererConfig: {
+                antialias: false,
+                alpha: false,
+                depth: true,
+                stencil: false,
+                preserveDrawingBuffer: false,
+                powerPreference: 'high-performance',
+                failIfMajorPerformanceCaveat: false,
+                precision: 'mediump',
+                logarithmicDepthBuffer: false
+            }
+        };
+        try {
+            return Globe(primaryConfig)(globeContainer);
+        } catch (e) {
+            // Retry with even more permissive/lower-power config
+            try {
+                const fallbackConfig = {
+                    rendererConfig: {
+                        antialias: false,
+                        alpha: false,
+                        depth: true,
+                        stencil: false,
+                        preserveDrawingBuffer: false,
+                        powerPreference: 'low-power',
+                        failIfMajorPerformanceCaveat: false,
+                        precision: 'mediump',
+                        logarithmicDepthBuffer: false
+                    }
+                };
+                return Globe(fallbackConfig)(globeContainer);
+            } catch (e2) {
+                // Surface a friendly message in the UI
+                try {
+                    const msg = document.createElement('div');
+                    msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e66;background:#000;';
+                    msg.textContent = 'WebGL failed to initialize. Please enable WebGL or try a different browser/device.';
+                    globeContainer.appendChild(msg);
+                } catch(_) {}
+                throw e2;
+            }
+        }
+    }
+    const globe = createGlobeInstance()
         .pointsData([])
         .showAtmosphere(true)
         .atmosphereAltitude(0.275)
@@ -133,12 +400,17 @@
         .polygonStrokeColor(f => (f.properties && f.properties.stroke) || '#ffff00')
         .polygonAltitude(f => (f.properties && typeof f.properties.alt === 'number') ? f.properties.alt : 0.01)
         .polygonLabel(f => (f.properties && f.properties.label) || '')
-        .polygonsTransitionDuration(0)
-        (document.getElementById('globeViz'));
+        .polygonsTransitionDuration(0);
+
+    // Always use high-resolution textures
+    try {
+        globe.globeImageUrl('./resources/8081_earthmap10k.jpg');
+        globe.bumpImageUrl('./resources/8081_earthbump10k.jpg');
+    } catch(_) {}
 
     const globeMaterial = globe.globeMaterial();
     globeMaterial.bumpScale = 30;
-    // Remove specular for stability; keep bump map only
+    // Remove specular for stability; keep bump map
     globeMaterial.specularMap = null;
     globeMaterial.shininess = 0;
 
@@ -180,7 +452,7 @@
         const lat2 = THREE.MathUtils.radToDeg(φ2);
         return [lon2, lat2];
     }
-    function circleFeature(lon, lat, radiusKm, steps = 128, props = {}) {
+    function circleFeature(lon, lat, radiusKm, steps = STEPS_POLY, props = {}) {
         if (!Number.isFinite(radiusKm) || radiusKm <= 0) return null;
         const coords = [];
         for (let i = 0; i <= steps; i++) {
@@ -190,9 +462,42 @@
         }
         return { type: 'Feature', properties: props, geometry: { type: 'Polygon', coordinates: [coords] } };
     }
+    // Simple transliteration to avoid '?' for unsupported glyphs on canvas labels
+    function transliterate(s) {
+        try {
+            if (!s) return '';
+            let t = String(s);
+            try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(_) {}
+            const map = {
+                'ß':'ss','Ø':'O','ø':'o','Ł':'L','ł':'l','Đ':'D','đ':'d','Œ':'OE','œ':'oe','Æ':'AE','æ':'ae',
+                'Þ':'Th','þ':'th','Å':'A','å':'a','Ğ':'G','ğ':'g','Ş':'S','ş':'s','Č':'C','č':'c','Ć':'C','ć':'c',
+                'Ž':'Z','ž':'z','Ñ':'N','ñ':'n','İ':'I','ı':'i'
+            };
+            t = t.replace(/[ßØøŁłĐđŒœÆæÞþÅåĞğŞşČčĆćŽžÑñİı]/g, c => map[c] || '');
+            t = t.replace(/[^\x20-\x7E]/g, '');
+            return t;
+        } catch(_) { return String(s || ''); }
+    }
+    function annulusFeature(lon, lat, radiusOuterKm, thicknessKm, steps = 128, props = {}) {
+        if (!Number.isFinite(radiusOuterKm) || radiusOuterKm <= 0) return null;
+        const rIn = Math.max(0.0001, radiusOuterKm - Math.max(0.001, thicknessKm));
+        const rOut = radiusOuterKm;
+        const outer = [];
+        const inner = [];
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const b = 2 * Math.PI * t;
+            const [xo, yo] = destinationPoint(lon, lat, b, rOut);
+            const [xi, yi] = destinationPoint(lon, lat, b, rIn);
+            outer.push([xo, yo]);
+            inner.push([xi, yi]);
+        }
+        inner.reverse(); // opposite winding for hole
+        return { type: 'Feature', properties: props, geometry: { type: 'Polygon', coordinates: [outer, inner] } };
+    }
 
     // Hover circle overlay as a thin line loop (drawn on top, no depth test)
-    function showHoverCircle(lon, lat, radiusKm, steps = 192) {
+    function showHoverCircle(lon, lat, radiusKm, steps = STEPS_HOVER) {
         clearHoverCircle();
         if (!Number.isFinite(radiusKm) || radiusKm <= 0) return;
         const pts = [];
@@ -206,6 +511,8 @@
         const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.9, depthTest: false });
         const loop = new THREE.LineLoop(geom, mat);
         loop.renderOrder = 9999;
+        // Do not block globe.gl raycasting (tooltips)
+        try { loop.raycast = () => {}; } catch(_) {}
         scene.add(loop);
         hoverCircle = loop;
     }
@@ -219,7 +526,7 @@
         hoverCircle = null;
     }
 
-    function setCraterRimCircle(lon, lat, radiusKm, color = 0xffffff, steps = 256) {
+    function setCraterRimCircle(lon, lat, radiusKm, color = 0xffffff, steps = STEPS_RIM) {
         clearCraterRimCircle();
         if (!Number.isFinite(radiusKm) || radiusKm <= 0) return;
         const pts = [];
@@ -233,6 +540,8 @@
         const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1.0, depthTest: false });
         const loop = new THREE.LineLoop(geom, mat);
         loop.renderOrder = 9998;
+        // Do not intercept raycasting for tooltips
+        try { loop.raycast = () => {}; } catch(_) {}
         scene.add(loop);
         craterRim = loop;
     }
@@ -396,7 +705,7 @@
 
         // Sky: procedural starfield only (no external textures)
         let starfield = null;
-        function buildStarfield(count = 4000, radius = 5000) {
+        function buildStarfield(count = (PERF === 'low' ? 1000 : 4000), radius = 5000) {
             try {
                 const geom = new THREE.BufferGeometry();
                 const positions = new Float32Array(count * 3);
@@ -426,6 +735,8 @@
                 const mat = new THREE.PointsMaterial({ size: 2.0, sizeAttenuation: false, vertexColors: true, depthWrite: false, transparent: true, opacity: 0.9 });
                 const points = new THREE.Points(geom, mat);
                 points.frustumCulled = false;
+                // Avoid intercepting pointer raycasts (tooltips should hit the globe polygons)
+                try { points.raycast = () => {}; } catch(_) {}
                 scene.add(points);
                 return points;
             } catch(e) { return null; }
@@ -614,6 +925,7 @@
     function disposeScene() {
         try { if (rafId) { cancelAnimationFrame(rafId); rafId = null; } } catch(e) {}
         try { clearHoverCircle(); } catch(e) {}
+        try { clearCraterRimCircle(); } catch(e) {}
         // Dispose active asteroids and template
         try { for (const a of asteroids) { try { a.dispose(); } catch(e) {} } } catch(e) {}
         asteroids = [];
@@ -622,6 +934,10 @@
         // Clear globe overlays
         try { globe.ringsData([]); } catch(e) {}
         try { globe.polygonsData([]); } catch(e) {}
+        try { globe.labelsData && globe.labelsData([]); } catch(e) {}
+        try { globe.pointsData && globe.pointsData([]); } catch(e) {}
+        // Attempt to call internal destructor if provided by Globe.gl
+        try { if (typeof globe._destructor === 'function') globe._destructor(); } catch(e) {}
         // Dispose controls explicitly if present
         try { const c = globe.controls && globe.controls(); if (c && c.dispose) c.dispose(); } catch(e) {}
         // Dispose textures from material on teardown (reset everything)
@@ -638,6 +954,7 @@
                 sound.impactAudio.pause();
                 sound.impactAudio.src = '';
                 try { sound.impactAudio.load(); } catch(_) {}
+                sound.impactAudio = null;
             }
         } catch(e) {}
         // Dispose background skybox texture / starfield
@@ -652,12 +969,30 @@
                 try { if (g) g.dispose(); } catch(_) {}
                 try { if (m) m.dispose(); } catch(_) {}
                 try { scene.remove(starfield); } catch(_) {}
+                starfield = null;
             }
         } catch(e) {}
+        // Deep-dispose any remaining THREE objects created by Globe.gl
+        try {
+            const kill = [];
+            scene.traverse(o => { if (o && o !== camera) kill.push(o); });
+            for (const o of kill) {
+                try {
+                    if (o.geometry) { try { o.geometry.dispose(); } catch(_) {} }
+                    if (o.material) {
+                        const m = o.material;
+                        if (Array.isArray(m)) { for (const mm of m) { try { mm.dispose(); } catch(_) {} } }
+                        else { try { m.dispose(); } catch(_) {} }
+                    }
+                    if (o.parent) { try { o.parent.remove(o); } catch(_) {} }
+                } catch(_) {}
+            }
+        } catch(_) {}
 
         // Renderer + GL context loss
         try {
             if (renderer) {
+                try { renderer.setAnimationLoop && renderer.setAnimationLoop(null); } catch(_) {}
                 renderer.dispose();
                 if (renderer.forceContextLoss) { try { renderer.forceContextLoss(); } catch(_) {} }
                 const gl = renderer.getContext && renderer.getContext();
@@ -672,8 +1007,13 @@
             const el = document.getElementById('globeViz');
             if (el) { while (el.firstChild) el.removeChild(el.firstChild); }
         } catch(e) {}
+        // Reset large state objects to aid GC
+        try { rings = []; ringsDirty = false; } catch(_) {}
+        try { burnPolys = []; burnPolysDirty = false; } catch(_) {}
+        try { craterRim = null; hoverCircle = null; } catch(_) {}
+        try { followTarget = null; currentImpact = null; impactTargetVec = null; } catch(_) {}
+        try { prefetchState = { lat: null, lon: null, isOceanP: null, summaryP: null, popPromises: new Map() }; } catch(_) {}
     }
-    window.addEventListener('beforeunload', disposeScene);
     window.addEventListener('pagehide', disposeScene);
     window.addEventListener('unload', disposeScene);
 
@@ -709,6 +1049,11 @@
         }
         spawnAsteroidTo(target.clone());
     }
+
+    // Ensure cleanup on navigation to avoid leaking GPU resources (deduped listeners)
+    try {
+        window.addEventListener('beforeunload', () => { try { disposeScene(); } catch(_) {} });
+    } catch(_) {}
 
     // --- Shake helpers ---
     function triggerShake(amount = 2.5, durationMs = 2000) {
@@ -808,57 +1153,72 @@
         // Attach city labels lazily once the sidebar appears
         try {
             if (!labelsAttached) {
-                // Load only country capitals (GeoNames feature code PPLC) from cities15000.txt
-                fetch('./resources/cities15000.txt')
-                  .then(res => res.ok ? res.text() : '')
-                  .catch(() => '')
-                  .then((txt) => {
+                // Try local capitals from cities500.json; fallback to small built-in capitals list
+                const topCapitals = (cities, limit = MAX_CAPITAL_LABELS) => {
+                    try {
+                        const arr = Array.isArray(cities) ? cities.slice() : [];
+                        arr.sort((a,b) => (Number(b.pop||0) - Number(a.pop||0)));
+                        return arr.slice(0, Math.max(1, limit));
+                    } catch(_) { return cities; }
+                };
+                const setupLabels = (cities) => {
+                    try {
+                        const data = topCapitals(cities);
+                        globe
+                          .labelsData(data)
+                          .labelLat('lat')
+                          .labelLng('lng')
+                          .labelText(d => transliterate(d.name))
+                          .labelSize(d => 0.42 + Math.min(0.12, (d.pop||0) / 3e8))
+                          .labelColor(() => 'rgba(235,245,255,0.9)')
+                          .labelResolution(2)
+                          .labelAltitude(0.015)
+                          .labelIncludeDot(true)
+                          .labelDotRadius(0.08)
+                          .labelDotColor(() => 'rgba(255,255,255,0.9)');
+                        labelsAttached = true;
+                    } catch(_) {}
+                };
+                if (PERF !== 'low') {
+                  fetch('./resources/cities500.json')
+                  .then(res => res.ok ? res.json() : null)
+                  .then(data => {
                       try {
                           let cities = [];
-                          if (typeof txt === 'string' && txt.length) {
-                              const lines = txt.split(/\r?\n/);
-                              for (let i = 0; i < lines.length; i++) {
-                                  const line = lines[i];
-                                  if (!line || line[0] === '#') continue;
-                                  const cols = line.split('\t');
-                                  if (cols.length < 19) continue;
-                                  const name = cols[1] || cols[2] || '';
-                                  const lat = Number(cols[4]);
-                                  const lng = Number(cols[5]);
-                                  const fclass = cols[6] || '';
-                                  const fcode = cols[7] || '';
-                                  const pop = Number(cols[14] || 0);
-                                  // Keep only country capitals (PPLC)
-                                  if (fclass !== 'P' || fcode !== 'PPLC') continue;
+                          if (Array.isArray(data)) {
+                              // Expect objects with at least: name, lat, lng, fclass/fcode/pop
+                              for (const c of data) {
+                                  const name = c.name || c.asciiName || '';
+                                  const lat = Number(c.lat ?? c.latitude);
+                                  const lng = Number(c.lng ?? c.longitude);
+                                  const fclass = (c.fclass || c.featureClass || '').toString();
+                                  const fcode = (c.fcode || c.featureCode || '').toString();
+                                  const pop = Number(c.population || c.pop || 0);
+                                  if (fclass !== 'P' || fcode !== 'PPLC') continue; // capitals only
                                   if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
                                   cities.push({ name, lat, lng, pop });
                               }
                           }
-                          if (!cities.length) {
+                          if (cities.length) {
+                              setupLabels(cities);
                               return;
                           }
-                          globe
-                            .labelsData(cities)
-                            .labelLat('lat')
-                            .labelLng('lng')
-                            .labelText(d => transliterate(d.name))
-                            // Compact sizes for capitals-only set
-                            .labelSize(d => 0.45 + Math.min(0.15, (d.pop||0) / 3e8))
-                            .labelColor(() => 'rgba(235,245,255,0.9)')
-                            .labelResolution(2)
-                            .labelAltitude(0.01)
-                            .labelIncludeDot(true)
-                            .labelDotRadius(0.1)
-                            .labelDotColor(() => 'rgba(255,255,255,0.9)');
-                          labelsAttached = true;
-                      } catch(e) { /* ignore */ }
+                      } catch(_) {}
+                      // Fallback: extended capitals set (built-in)
+                      setupLabels(capitalsExtended);
+                  })
+                  .catch(() => {
+                      setupLabels(capitalsExtended);
                   });
+                } else {
+                  setupLabels(capitalsExtended);
+                }
             }
         } catch(e) {}
         // Add action to simulate another impact
         try {
             const act = document.createElement('div');
-            act.style.marginTop = '12px';
+            act.className = 'footer';
             const btn = document.createElement('button');
             btn.textContent = 'Simulate another impact';
             btn.style.padding = '10px 12px';
@@ -944,11 +1304,97 @@
             window.dispatchEvent(new Event('resize'));
         }, 50);
     }
-    function el(tag, props = {}, children = []) { const e = document.createElement(tag); Object.assign(e, props); children.forEach(c=>e.appendChild(c)); return e; }
+    function el(tag, props = {}, children = []) {
+        const e = document.createElement(tag);
+        Object.assign(e, props);
+        try {
+            if (props && props.attrs && typeof props.attrs === 'object') {
+                for (const [k, v] of Object.entries(props.attrs)) {
+                    if (v != null) e.setAttribute(k, String(v));
+                }
+            }
+        } catch(_) {}
+        children.forEach(c => e.appendChild(c));
+        return e;
+    }
     function txt(s) { return document.createTextNode(String(s)); }
     function setText(id, v) { const n = document.getElementById(id); if (n) n.textContent = v; }
     function addNote(id, message) { const n = document.getElementById(id); if (n) n.textContent = message; }
     function popKey(km) { try { return String(Number(km).toFixed(6)); } catch(e) { return String(km); } }
+
+    // Lightweight, instant tooltip (no native delay)
+    let instantTipEl = null;
+    function ensureTipEl() {
+        if (instantTipEl) return instantTipEl;
+        const tip = document.createElement('div');
+        tip.className = 'instant-tip';
+        tip.style.position = 'fixed';
+        tip.style.zIndex = '99999';
+        tip.style.pointerEvents = 'none';
+        tip.style.background = '#0b1220';
+        tip.style.border = '1px solid #2a3b5f';
+        tip.style.color = '#e6eefc';
+        tip.style.padding = '6px 8px';
+        tip.style.borderRadius = '6px';
+        tip.style.fontSize = '12px';
+        tip.style.maxWidth = '260px';
+        tip.style.boxShadow = '0 6px 18px rgba(0,0,0,0.45)';
+        tip.style.opacity = '0';
+        tip.style.transform = 'translateY(-4px)';
+        tip.style.transition = 'opacity 120ms ease, transform 120ms ease';
+        document.body.appendChild(tip);
+        instantTipEl = tip;
+        return tip;
+    }
+    function positionTip(x, y) {
+        const tip = ensureTipEl();
+        const pad = 10;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const rect = tip.getBoundingClientRect();
+        let nx = Math.min(Math.max(0, x + pad), Math.max(0, vw - rect.width - 2));
+        let ny = Math.min(Math.max(0, y + pad), Math.max(0, vh - rect.height - 2));
+        tip.style.left = nx + 'px';
+        tip.style.top = ny + 'px';
+    }
+    function showTip(text, x, y) {
+        const tip = ensureTipEl();
+        tip.textContent = text || '';
+        positionTip(x, y);
+        requestAnimationFrame(() => {
+            tip.style.opacity = '1';
+            tip.style.transform = 'translateY(0)';
+        });
+    }
+    function hideTip() {
+        if (!instantTipEl) return;
+        instantTipEl.style.opacity = '0';
+        instantTipEl.style.transform = 'translateY(-4px)';
+    }
+    function attachInstantTip(el, text) {
+        if (!el) return;
+        // Avoid native delay: remove title attribute if present
+        try { if (el.hasAttribute('title')) el.removeAttribute('title'); } catch(_) {}
+        const getText = () => text || el.getAttribute('data-tip') || '';
+        const onEnter = (e) => showTip(getText(), e.clientX || 0, e.clientY || 0);
+        const onMove = (e) => positionTip(e.clientX || 0, e.clientY || 0);
+        const onLeave = () => hideTip();
+        el.addEventListener('mouseenter', onEnter);
+        el.addEventListener('mousemove', onMove);
+        el.addEventListener('mouseleave', onLeave);
+        // Keyboard accessibility
+        el.addEventListener('focus', () => {
+            const r = el.getBoundingClientRect();
+            showTip(getText(), r.left + r.width / 2, r.top);
+        });
+        el.addEventListener('blur', hideTip);
+        // Touch: tap to toggle briefly
+        el.addEventListener('touchstart', (e) => {
+            const t = (e.touches && e.touches[0]) || { clientX: 0, clientY: 0 };
+            showTip(getText(), t.clientX, t.clientY);
+            setTimeout(hideTip, 1600);
+        }, { passive: true });
+    }
     function startPrefetch(lat, lon) {
         try {
             prefetchState.lat = Number(lat);
@@ -988,11 +1434,52 @@
     }
     function buildKpiGrid() {
         const wrap = el('div');
-        wrap.appendChild(card('Environment', el('span', { id:'kEnv', innerText: '…' })));
-        wrap.appendChild(card('Kinetic energy (TNT eq.)', el('span', { id:'kEnergy', innerText: '…' })));
-        wrap.appendChild(card('Crater diameter (km)', el('span', { id:'kCrater', innerText: '…' })));
-        wrap.appendChild(card('Crater depth (m)', el('span', { id:'kCraterDepth', innerText: '…' })));
-        wrap.appendChild(card('Tsunami', el('span', { id:'kTsunami', innerText: '—' })));
+        // Helper to create an info badge with instant tooltip
+        const mkInfo = (text) => {
+            const b = el('span', { className: 'info-badge', innerText: 'i', attrs: { 'data-tip': text, tabindex: 0 } });
+            attachInstantTip(b, text);
+            return b;
+        };
+
+        const envWrap = el('span', { className: 'with-info' });
+        const envTip = 'Classifies the impact point as Land or Ocean based on its location.';
+        const envVal = el('span', { id:'kEnv', innerText: '…', attrs: { 'data-tip': envTip, tabindex: 0 } });
+        attachInstantTip(envVal, envTip);
+        envWrap.appendChild(envVal);
+        envWrap.appendChild(mkInfo(envTip));
+        wrap.appendChild(card('Environment', envWrap));
+        const energyWrap = el('span', { className: 'with-info' });
+        const tipText = "Hiroshima equivalents use 'Little Boy' ≈ 15 kt (kilotons TNT).";
+        const energyVal = el('span', { id:'kEnergy', innerText: '…', attrs: { 'data-tip': tipText, tabindex: 0 } });
+        const infoBadge = el('span', { className: 'info-badge', innerText: 'i', attrs: { 'data-tip': tipText, tabindex: 0 } });
+        attachInstantTip(energyVal, tipText);
+        attachInstantTip(infoBadge, tipText);
+        energyWrap.appendChild(energyVal);
+        energyWrap.appendChild(infoBadge);
+        wrap.appendChild(card('Kinetic energy (TNT eq.)', energyWrap));
+        const craterDTip = 'Final crater diameter from the impact model (km). Also drawn on the globe.';
+        const craterDWrap = el('span', { className: 'with-info' });
+        const craterDVal = el('span', { id:'kCrater', innerText: '…', attrs: { 'data-tip': craterDTip, tabindex: 0 } });
+        attachInstantTip(craterDVal, craterDTip);
+        craterDWrap.appendChild(craterDVal);
+        craterDWrap.appendChild(mkInfo(craterDTip));
+        wrap.appendChild(card('Crater diameter (km)', craterDWrap));
+
+        const craterDepthTip = "Final crater depth from the impact model (meters). 'Eiffel towers' uses 300 m per tower.";
+        const craterDepthWrap = el('span', { className: 'with-info' });
+        const craterDepthVal = el('span', { id:'kCraterDepth', innerText: '…', attrs: { 'data-tip': craterDepthTip, tabindex: 0 } });
+        attachInstantTip(craterDepthVal, craterDepthTip);
+        craterDepthWrap.appendChild(craterDepthVal);
+        craterDepthWrap.appendChild(mkInfo(craterDepthTip));
+        wrap.appendChild(card('Crater depth (m)', craterDepthWrap));
+
+        const tsunamiTip = 'Estimated coastal wave amplitude for ocean impacts. Shows collapse-wave at coast when applicable. Assumes depth ~3682 m, 100 km to coast, slope 0.005.';
+        const tsunamiWrap = el('span', { className: 'with-info' });
+        const tsunamiVal = el('span', { id:'kTsunami', innerText: '—', attrs: { 'data-tip': tsunamiTip, tabindex: 0 } });
+        attachInstantTip(tsunamiVal, tsunamiTip);
+        tsunamiWrap.appendChild(tsunamiVal);
+        tsunamiWrap.appendChild(mkInfo(tsunamiTip));
+        wrap.appendChild(card('Tsunami', tsunamiWrap));
         return wrap;
     }
     function card(title, valueNode) {
@@ -1006,12 +1493,26 @@
         const wrap = el('div');
         // Keep only thermal population list and API ranges; omit verbose impact summary text blocks
         wrap.appendChild(el('div', { id: 'impactErr', className: 'meta', innerText: '' }));
+        // Tip: circles on hover
+        wrap.appendChild(el('div', { className: 'meta', innerText: 'Tip: hover rows to draw circles on the globe.' }));
         // Thermal sections first
-        wrap.appendChild(el('h2', { innerText: 'Thermal impact population' }));
+        const tipThermPop = 'Population within thermal-damage rings: cumulative gridded population (2020), differenced into non-overlapping rings.';
+        const hThermPop = el('h2', { innerText: 'Thermal impact population' });
+        const hThermPopInfo = el('span', { className: 'info-badge', innerText: 'i', attrs: { 'data-tip': tipThermPop, tabindex: 0 } });
+        attachInstantTip(hThermPopInfo, tipThermPop);
+        hThermPop.appendChild(el('span', { innerText: ' ' }));
+        hThermPop.appendChild(hThermPopInfo);
+        wrap.appendChild(hThermPop);
         const tlistTop = el('div', { id: 'thermalPopList' });
         tlistTop.appendChild(el('div', { className: 'meta', innerText: 'loading…' }));
         wrap.appendChild(tlistTop);
-        wrap.appendChild(el('h2', { innerText: 'Thermal ranges (API)' }));
+        const tipThermRanges = 'Ignition thresholds (km) from the impact model: clothes, plywood, grass, paper, trees.';
+        const hThermRanges = el('h2', { innerText: 'Thermal ranges' });
+        const hThermRangesInfo = el('span', { className: 'info-badge', innerText: 'i', attrs: { 'data-tip': tipThermRanges, tabindex: 0 } });
+        attachInstantTip(hThermRangesInfo, tipThermRanges);
+        hThermRanges.appendChild(el('span', { innerText: ' ' }));
+        hThermRanges.appendChild(hThermRangesInfo);
+        wrap.appendChild(hThermRanges);
         const rlistTop = el('div', { id: 'thermalRangesList' });
         rlistTop.appendChild(el('div', { className: 'meta', innerText: 'loading…' }));
         wrap.appendChild(rlistTop);
@@ -1142,14 +1643,31 @@
             if ((Mt == null || isNaN(Number(Mt))) && J != null && !isNaN(Number(J))) {
                 Mt = Number(J) / 4.184e15;
             }
-            setText('kEnergy', formatTntEqFromMt(Mt));
+            const kt = (Number(Mt) || 0) * 1000.0;
+            const hiro = kt / 15.0; // Little Boy ≈ 15 kt
+            let hiroTxt = '';
+            if (isFinite(hiro) && hiro > 0) {
+                const val = hiro >= 100 ? nf(hiro) : hiro.toFixed(1);
+                hiroTxt = ` (${val} Hiroshima)`;
+            }
+            setText('kEnergy', `${formatTntEqFromMt(Mt)}${hiroTxt}`);
         } catch(e) {}
         try {
             const C = s.crater || {};
             const Dfr_km = (C.final_diameter_m || 0)/1000.0;
-            setText('kCrater', Dfr_km > 0 ? Dfr_km.toFixed(2) : '—');
+            if (Dfr_km > 0) {
+                const fields = (Dfr_km * 1000.0) / 109.7; // football field = 109.7 m
+                setText('kCrater', `${Dfr_km.toFixed(2)} km (${fields.toFixed(1)} football fields)`);
+            } else {
+                setText('kCrater', '—');
+            }
             const d_m = Number(C.final_depth_m);
-            setText('kCraterDepth', (d_m && d_m > 0) ? Number(d_m).toFixed(0) : '—');
+            if (d_m && d_m > 0) {
+                const towers = d_m / 300.0; // Eiffel tower ~300 m
+                setText('kCraterDepth', `${Number(d_m).toFixed(0)} m (${towers.toFixed(1)} Eiffel towers)`);
+            } else {
+                setText('kCraterDepth', '—');
+            }
         } catch(e) {}
         try {
             if (!envIsOcean) {
@@ -1175,6 +1693,21 @@
 
     function fmtM(x) { return (x==null || isNaN(Number(x))) ? '—' : `${Number(x).toFixed(0)} m`; }
     function fmtDb(x) { return (x==null || isNaN(Number(x))) ? '—' : `${Number(x).toFixed(1)} dB`; }
+    function fmtDurSeconds(x) {
+        if (x == null || isNaN(Number(x))) return '—';
+        const sec = Math.max(0, Math.floor(Number(x)));
+        if (sec >= 3600) {
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            return m > 0 ? `${h} h ${m} m` : `${h} h`;
+        }
+        if (sec >= 60) {
+            const m = Math.floor(sec / 60);
+            const s = sec % 60;
+            return s > 0 ? `${m} m ${s} s` : `${m} m`;
+        }
+        return `${sec} s`;
+    }
 
     function renderEntryBlock(s) {
         const box = document.getElementById('entryList'); if (!box) return; box.innerHTML = '';
@@ -1193,6 +1726,13 @@
             for (const [k,v] of rows) {
                 const row = el('div', { className:'item' });
                 row.appendChild(el('div', { className:'row' }, [el('div',{className:'t',innerText:k}), el('div',{className:'v',innerText:v})]));
+                if (k === 'Fatal radius' && Number.isFinite(Number(a.fatal_radius_km)) && a.fatal_radius_km > 0) {
+                    const km = Number(a.fatal_radius_km);
+                    row.addEventListener('mouseenter', () => {
+                        try { if (currentImpact) showHoverCircle(currentImpact.lon, currentImpact.lat, km, STEPS_HOVER); } catch(_) {}
+                    });
+                    row.addEventListener('mouseleave', () => { try { clearHoverCircle(); } catch(_) {} });
+                }
                 box.appendChild(row);
             }
         } catch(e) {}
@@ -1248,6 +1788,16 @@
                     el('div', { className: 't', innerText: name }),
                     el('div', { className: 'v', innerText: fmtKm(val) })
                 ]));
+                // Hover overlay circle on globe for this threshold
+                try {
+                    const km = Number(val);
+                    if (Number.isFinite(km) && km > 0) {
+                        row.addEventListener('mouseenter', () => {
+                            try { if (currentImpact) showHoverCircle(currentImpact.lon, currentImpact.lat, km, STEPS_HOVER); } catch(_) {}
+                        });
+                        row.addEventListener('mouseleave', () => { try { clearHoverCircle(); } catch(_) {} });
+                    }
+                } catch(_) {}
                 box.appendChild(row);
             };
             Object.entries(h).forEach(([k, v]) => pushRow(labelize(k), v));
@@ -1289,17 +1839,29 @@
             }
             const samples = Array.isArray(e.samples) ? e.samples.slice().sort((a,b)=> (a.r_km||0) - (b.r_km||0)).slice(0, 12) : [];
             if (samples.length) {
-                // Title
-                const title = el('div', { className: 'item' });
-                title.appendChild(el('div', { className: 't', innerText: 'Samples (radius → thickness / arrival)' }));
-                box.appendChild(title);
-                // Rows: one neat line per sample
+                const wrap = el('div', { className: 'item' });
+                // Header
+                wrap.appendChild(el('div', { className: 't', innerText: 'Samples' }));
+                // Table-like grid
+                const grid = el('div');
+                grid.style.display = 'grid';
+                grid.style.gridTemplateColumns = 'minmax(90px,1fr) minmax(90px,1fr) minmax(90px,1fr)';
+                grid.style.columnGap = '10px';
+                grid.style.rowGap = '6px';
+                // Head row
+                const h1 = el('div', { className: 't', innerText: 'Radius' });
+                const h2 = el('div', { className: 't', innerText: 'Thickness' });
+                const h3 = el('div', { className: 't', innerText: 'Arrival' });
+                grid.appendChild(h1); grid.appendChild(h2); grid.appendChild(h3);
+                // Rows
                 for (const s of samples) {
-                    const line = `${fmtKm(s.r_km)} → ${s.thickness_m!=null?fmtM(s.thickness_m):'—'} / ${s.arrival_s!=null? (Number(s.arrival_s).toFixed(0)+' s'):'—'}`;
-                    const row = el('div', { className: 'item' });
-                    row.appendChild(el('div', { innerText: line }));
-                    box.appendChild(row);
+                    const r = el('div', { innerText: fmtKm(s.r_km) });
+                    const th = el('div', { innerText: (s.thickness_m!=null?fmtM(s.thickness_m):'—') });
+                    const ar = el('div', { innerText: (s.arrival_s!=null? fmtDurSeconds(s.arrival_s):'—') });
+                    grid.appendChild(r); grid.appendChild(th); grid.appendChild(ar);
                 }
+                wrap.appendChild(grid);
+                box.appendChild(wrap);
             }
         } catch(e) {}
     }
@@ -1328,30 +1890,39 @@
                     craterRadiusKm = crater_km / 2;
                     const depth_m = Number((C.final_depth_m != null) ? C.final_depth_m : 0);
                     const depth_txt = (depth_m && depth_m > 0) ? `, depth \u2248 ${Number(depth_m).toFixed(0)} m` : '';
-                    const props = envIsOcean
-                      ? { fill: 'rgba(102,204,255,0.28)', stroke: '#66ccff', alt: 0.030, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` }
-                      : { fill: 'rgba(255,255,255,0.12)', stroke: '#ffffff', alt: 0.015, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` };
-                    const crater = circleFeature(lon, lat, craterRadiusKm, 192, props);
-                    if (crater) feats.push(crater);
+                    // Fill disk for crater area
+                    const propsFill = envIsOcean
+                      ? { fill: 'rgba(255,0,255,0.35)', stroke: '#ff00ff', alt: 0.050, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` }
+                      : { fill: 'rgba(255,255,255,0.12)', stroke: '#ffffff', alt: 0.018, label: `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}` };
+                    const craterFill = circleFeature(lon, lat, craterRadiusKm, STEPS_POLY, propsFill);
+                    if (craterFill) feats.push(craterFill);
+                    // Visible rim annulus (thickness ~2% of radius, min 0.6 km)
+                    const rimThick = Math.max(0.6, craterRadiusKm * 0.02);
+                    const rimLabel = `Crater diameter ≈ ${crater_km.toFixed(2)} km${depth_txt}`;
+                    const propsRim = envIsOcean
+                      ? { fill: 'rgba(255,0,255,0.95)', stroke: '#ff00ff', alt: 0.060, label: rimLabel }
+                      : { fill: 'rgba(255,255,255,0.95)', stroke: '#ffffff', alt: 0.022, label: rimLabel };
+                    const craterRimBand = annulusFeature(lon, lat, craterRadiusKm, rimThick, STEPS_POLY, propsRim);
+                    if (craterRimBand) feats.push(craterRimBand);
                 }
             } catch(e) {}
-            // Ocean impacts: skip land thermal overlays; keep crater polygon and add a bright rim overlay for visibility
+            // Ocean impacts: skip land thermal overlays; keep crater polygon and add a bright rim and static ring for visibility
             if (envIsOcean) {
                 burnPolys = feats;
                 burnPolysDirty = true;
-                try { if (craterRadiusKm > 0) setCraterRimCircle(lon, lat, craterRadiusKm, 0x66ccff); } catch(_) {}
+                try { if (craterRadiusKm > 0) setCraterRimCircle(lon, lat, craterRadiusKm, 0xff00ff); } catch(_) {}
                 return;
             }
             const red = circleFeature(
-                lon, lat, Number(r.third_degree_burn), 192,
+                lon, lat, Number(r.third_degree_burn), STEPS_POLY,
                 { fill: 'rgba(255,0,0,0.22)', stroke: '#ff0000', alt: 0.010, label: 'DEAD (third-degree burns)' }
             );
             const orange = circleFeature(
-                lon, lat, Number(r.second_degree_burn), 192,
+                lon, lat, Number(r.second_degree_burn), STEPS_POLY,
                 { fill: 'rgba(255,165,0,0.20)', stroke: '#ffa500', alt: 0.010, label: 'Second-degree burns' }
             );
             const yellow = circleFeature(
-                lon, lat, Number(r.first_degree_burn), 192,
+                lon, lat, Number(r.first_degree_burn), STEPS_POLY,
                 { fill: 'rgba(255,255,0,0.18)', stroke: '#ffff00', alt: 0.010, label: 'First-degree burns' }
             );
             if (red) feats.push(red);
@@ -1359,8 +1930,8 @@
             if (yellow) feats.push(yellow);
             burnPolys = feats;
             burnPolysDirty = true;
-            // Add a subtle white rim on land as well
-            try { if (craterRadiusKm > 0) setCraterRimCircle(lon, lat, craterRadiusKm, 0xffffff); } catch(_) {}
+            // Add a subtle rim on land as well
+            try { if (craterRadiusKm > 0) { setCraterRimCircle(lon, lat, craterRadiusKm, 0xffffff); } } catch(_) {}
         } catch(e) {}
     }
 
@@ -1472,7 +2043,7 @@
                 row.addEventListener('mouseenter', () => {
                     try {
                         if (!currentImpact) return;
-                        showHoverCircle(currentImpact.lon, currentImpact.lat, it.km, 192);
+                        showHoverCircle(currentImpact.lon, currentImpact.lat, it.km, STEPS_HOVER);
                     } catch(e) {}
                 });
                 row.addEventListener('mouseleave', () => {
@@ -1537,23 +2108,6 @@
     // computeImpactModelKpis removed to ensure data is sourced from API
     // fetchRingsPopulation removed per requirements
 </script>
+<!-- end body -->
 </body>
 </html>
-    // Simple transliteration to avoid '?' for unsupported glyphs on canvas labels
-    function transliterate(s) {
-        try {
-            if (!s) return '';
-            let t = String(s);
-            // Decompose accents and strip combining marks
-            try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch(_) {}
-            const map = {
-                'ß':'ss','Ø':'O','ø':'o','Ł':'L','ł':'l','Đ':'D','đ':'d','Œ':'OE','œ':'oe','Æ':'AE','æ':'ae',
-                'Þ':'Th','þ':'th','Å':'A','å':'a','Ğ':'G','ğ':'g','Ş':'S','ş':'s','Č':'C','č':'c','Ć':'C','ć':'c',
-                'Ž':'Z','ž':'z','Ñ':'N','ñ':'n','İ':'I','ı':'i'
-            };
-            t = t.replace(/[ßØøŁłĐđŒœÆæÞþÅåĞğŞşČčĆćŽžÑñİı]/g, c => map[c] || '');
-            // Remove any remaining non-ASCII that could render as '?'
-            t = t.replace(/[^\x20-\x7E]/g, '');
-            return t;
-        } catch(_) { return String(s || ''); }
-    }
